@@ -155,7 +155,7 @@ void fragment() {
 	var al := Style.glass_button(Style.button("◀", 20, 44))
 	al.pressed.connect(func(): _cycle_ability(-1))
 	ah.add_child(al)
-	ability_lbl = Style.outlined(Style.label("", 19, Style.TEAL, Style.font_title), 6)
+	ability_lbl = Style.outlined(Style.label("", 24, Style.TEAL, Style.font_title), 6)
 	ability_lbl.custom_minimum_size.x = 250
 	ability_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ah.add_child(ability_lbl)
