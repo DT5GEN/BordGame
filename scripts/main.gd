@@ -14,6 +14,12 @@ func _ready() -> void:
 		_bench.call_deferred()
 	elif "--simtest" in OS.get_cmdline_user_args():
 		_simtest.call_deferred()
+	elif "--musictest" in OS.get_cmdline_user_args():
+		await _wait(0.5)
+		print("PLAYLIST ", Settings.playlist.size(), " now=", Settings.current_track, " playing=", Settings.music.playing)
+		for t in Settings.playlist:
+			print("  ", t["name"])
+		get_tree().quit()
 	elif "--herotest" in OS.get_cmdline_user_args():
 		show_menu()
 		await _wait(2.6)

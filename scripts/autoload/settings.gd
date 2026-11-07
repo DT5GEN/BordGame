@@ -94,6 +94,7 @@ func set_music_enabled(on: bool) -> void:
 # ------------------------------------------------------------ плейлист
 func rebuild_playlist() -> void:
 	playlist.clear()
+	_scan_res("res://Gmusic")
 	_scan_res("res://music")
 	if music_folder != "":
 		_scan_external(music_folder)
@@ -109,7 +110,7 @@ func _scan_res(dir_path: String) -> void:
 		if seen.has(name) or not (name.get_extension().to_lower() in EXTS):
 			continue
 		seen[name] = true
-		playlist.append({"name": name.get_basename(), "path": dir_path.path_join(name), "external": false})
+		playlist.append({"name": pretty(name.get_basename()), "path": dir_path.path_join(name), "external": false})
 
 func _scan_external(dir_path: String) -> void:
 	var d := DirAccess.open(dir_path)
@@ -117,7 +118,14 @@ func _scan_external(dir_path: String) -> void:
 		return
 	for f in d.get_files():
 		if f.get_extension().to_lower() in EXTS:
-			playlist.append({"name": f.get_basename(), "path": dir_path.path_join(f), "external": true})
+			playlist.append({"name": pretty(f.get_basename()), "path": dir_path.path_join(f), "external": true})
+
+## «beyond_the_silver_glade» → «Beyond the silver glade»
+func pretty(n: String) -> String:
+	var s := n.replace("_", " ").strip_edges()
+	if s.begins_with("gemini music"):
+		s = "Мелодия" + s.trim_prefix("gemini music")
+	return s.capitalize() if s == s.to_lower() and not s.begins_with("Мелодия") else s
 
 func _load_stream(t: Dictionary) -> AudioStream:
 	var path: String = t["path"]
