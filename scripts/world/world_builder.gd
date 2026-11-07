@@ -137,6 +137,9 @@ static func _trees(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 	var busy := {}
 	for o in map.objects:
 		busy[o["pos"]] = true
+		if o["type"] == "campfire":
+			for d in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]:
+				busy[o["pos"] + d] = true
 	for s in map.starts:
 		busy[s] = true
 	for z in map.h:

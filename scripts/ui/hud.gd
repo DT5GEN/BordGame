@@ -51,6 +51,7 @@ var alert_closable := false
 var banner: VBoxContainer
 var view_btn: Button
 var confirm_bar: PanelContainer
+var current_qte = null
 
 func _ready() -> void:
 	layer = 5
@@ -166,21 +167,23 @@ func _build_top() -> void:
 	var right2 := HBoxContainer.new()
 	right2.alignment = BoxContainer.ALIGNMENT_END
 	rcol.add_child(right2)
-	view_btn = Style.button("Вид: 3-е лицо", 18)
+	view_btn = Style.glass_button(Style.button("Вид: 3-е лицо", 17))
 	view_btn.pressed.connect(func(): view_toggle_requested.emit())
 	right2.add_child(view_btn)
-	var fb := Style.button("К герою", 18)
+	var fb := Style.glass_button(Style.button("К герою", 17))
 	fb.pressed.connect(func(): focus_requested.emit())
 	right2.add_child(fb)
-	var sbtn := Style.button("Настройки", 20)
+	var sbtn := Style.glass_button(Style.button("Настройки", 18))
 	sbtn.pressed.connect(func(): settings_requested.emit())
 	right.add_child(sbtn)
-	var hb := Style.button("?", 28, 56)
+	var hb := Style.glass_button(Style.button("?", 26, 50), Style.TEAL)
 	hb.add_theme_font_override("font", Style.font_title)
+	hb.add_theme_color_override("font_color", Style.TEAL)
+	hb.add_theme_color_override("font_hover_color", Color.WHITE)
 	hb.tooltip_text = "Свиток с правилами"
 	hb.pressed.connect(func(): help_requested.emit())
 	right.add_child(hb)
-	var mb := Style.button("Меню", 20)
+	var mb := Style.glass_button(Style.button("Меню", 18))
 	mb.pressed.connect(_confirm_menu)
 	right.add_child(mb)
 
@@ -394,6 +397,10 @@ func _on_modal_input(e: InputEvent) -> void:
 		_alert_closed.emit()
 
 func _unhandled_input(e: InputEvent) -> void:
+	if current_qte != null and is_instance_valid(current_qte) and (e.is_action_pressed("ui_accept") or (e is InputEventKey and e.pressed and e.keycode == KEY_SPACE)):
+		current_qte.press()
+		get_viewport().set_input_as_handled()
+		return
 	if e.is_action_pressed("ui_cancel"):
 		if popup.visible:
 			_close_popup()
@@ -434,41 +441,50 @@ func alert(title: String, text: String, col: Color = Style.GOLD) -> void:
 # ------------------------------------------------------------ интерактивный бой
 const BW := 520.0
 class QTE extends Control:
-	## Кольцо сжимается к кругу. Нажми, когда они совпадут, — блок щитом.
+	## Кольцо пульсирует: сходится и расходится. Нажми, когда оно совпадёт с щитом (станет зелёным).
 	signal done(ok: bool)
 	const R0 := 38.0
-	const TOL := 15.0
+	const TOL := 11.0
+	const AMP := 52.0
+	const PERIOD := 0.8
+	const PREP := 1.4
+	const LIMIT := 4.0
 	var t := 0.0
-	var dur := 1.4
+	var started := false
 	var finished := false
 	var ok := false
 
 	func _ready() -> void:
-		custom_minimum_size = Vector2(170, 170)
+		custom_minimum_size = Vector2(190, 190)
 		mouse_filter = Control.MOUSE_FILTER_STOP
-		dur = randf_range(1.15, 1.6)
 
 	func ring_r() -> float:
-		return lerpf(R0 * 3.3, 0.0, t / dur)
+		if not started:
+			return R0 + AMP
+		return R0 + AMP * cos(t * TAU / PERIOD)
 
 	func _process(delta: float) -> void:
 		if finished:
 			return
 		t += delta
 		queue_redraw()
-		if ring_r() < R0 - TOL - 2.0:
+		if not started:
+			if t >= PREP:
+				started = true
+				t = 0.0
+			return
+		if t >= LIMIT:
 			_finish(false)
 
 	func _gui_input(e: InputEvent) -> void:
-		if finished:
-			return
 		if (e is InputEventMouseButton and e.pressed) or (e is InputEventScreenTouch and e.pressed):
-			_finish(absf(ring_r() - R0) <= TOL)
+			press()
 			accept_event()
 
 	func press() -> void:
-		if not finished:
-			_finish(absf(ring_r() - R0) <= TOL)
+		if finished or not started:
+			return
+		_finish(absf(ring_r() - R0) <= TOL)
 
 	func _finish(v: bool) -> void:
 		finished = true
@@ -478,14 +494,17 @@ class QTE extends Control:
 
 	func _draw() -> void:
 		var c := size * 0.5
-		draw_circle(c, R0 + TOL, Color(0.9, 0.75, 0.3, 0.12))
-		draw_arc(c, R0, 0, TAU, 64, Color("e8c36a"), 5.0, true)
-		# деревянный щит в центре
-		draw_circle(c, R0 - 10, Color("8a5a2b"))
-		draw_arc(c, R0 - 10, 0, TAU, 48, Color("5a3a1a"), 4.0, true)
-		draw_line(c + Vector2(0, -(R0 - 12)), c + Vector2(0, R0 - 12), Color("6b4520"), 3.0)
-		draw_circle(c, 7, Color("c9c9c9"))
-		if not finished:
+		draw_circle(c, R0 + TOL, Color(0.4, 0.9, 0.5, 0.12))
+		draw_arc(c, R0, 0, TAU, 64, Color("e8c36a"), 4.0, true)
+		draw_circle(c, R0 - 9, Color("8a5a2b"))
+		draw_arc(c, R0 - 9, 0, TAU, 48, Color("5a3a1a"), 4.0, true)
+		draw_line(c + Vector2(0, -(R0 - 11)), c + Vector2(0, R0 - 11), Color("6b4520"), 3.0)
+		draw_circle(c, 6, Color("c9c9c9"))
+		if not started:
+			var n := 3 - int(t / PREP * 3.0)
+			draw_string(Style.font_title, c + Vector2(-60, -R0 - 30), "Готовься… %d" % maxi(1, n), HORIZONTAL_ALIGNMENT_CENTER, 120, 22, Color("e8c36a"))
+			draw_arc(c, ring_r(), 0, TAU, 64, Color(1, 0.4, 0.35, 0.5), 4.0, true)
+		elif not finished:
 			var rr := ring_r()
 			var near := absf(rr - R0) <= TOL
 			draw_arc(c, rr, 0, TAU, 64, Color("6fd07a") if near else Color("ff6a5a"), 6.0, true)
@@ -515,21 +534,22 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 	th.add_child(Style.outlined(Style.label(foe_name, 26, Color("ff7a6a"), Style.font_title), 4))
 	if foe_info != "":
 		v.add_child(_wrap_label(foe_info, 16, Color(Style.PARCH, 0.75), BW))
-	var hint := _wrap_label("%s атакует! Жми на щит, когда кольцо зелёное" % foe_name, 19, Style.GOLD, BW, Style.font_bold)
+	var hint := _wrap_label("%s атакует! Жми на ЩИТ (или пробел), когда кольцо станет ЗЕЛЁНЫМ" % foe_name, 19, Style.GOLD, BW, Style.font_bold)
 	v.add_child(hint)
 	var center := CenterContainer.new()
 	v.add_child(center)
 	var qte := QTE.new()
 	center.add_child(qte)
+	current_qte = qte
 	bottom.visible = false
 	alert_panel.visible = true
 	alert_panel.modulate.a = 1.0
 	_show_modal(0.0)
 	await _place_center(alert_panel, BW + 30, 10)
-	await get_tree().create_timer(0.7).timeout
+	await get_tree().create_timer(qte.PREP).timeout
 	battle_event.emit("enemy_attack")
-	qte.set_process(true)
 	var blocked: bool = await qte.done
+	current_qte = null
 	battle_event.emit("block" if blocked else "hit")
 	var bonus := 2 if blocked else -1
 	hint.text = ("Блок! Следующий бросок +2" if blocked else "Не успел... Следующий бросок −1")
@@ -563,6 +583,35 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 	rb.queue_free()
 	await get_tree().create_timer(0.6).timeout
 	return {"blocked": blocked, "bonus": bonus, "roll": roll, "total": total}
+
+## Второй игрок (защитник) сам бросает кубик на том же телефоне.
+func extra_roll(who: String, col: Color, bonus: int) -> int:
+	if fast:
+		await get_tree().process_frame
+		return randi_range(1, 6) + bonus
+	var v: VBoxContainer = alert_panel.get_child(0)
+	v.add_child(_wrap_label("Теперь защищается %s — передай телефон!" % who, 19, col.lightened(0.3), BW, Style.font_bold))
+	var num := Style.outlined(Style.label("?", 52, col.lightened(0.3), Style.font_title), 6)
+	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(num)
+	var rb := Style.button("Бросить кубик (%s)" % who, 22, 260)
+	rb.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var pressed := [false]
+	rb.pressed.connect(func(): pressed[0] = true)
+	v.add_child(rb)
+	await _place_center(alert_panel, BW + 30, 10)
+	while not pressed[0]:
+		await get_tree().process_frame
+	rb.disabled = true
+	Settings.play("dice", 0.0)
+	for i in 12:
+		num.text = str(randi_range(1, 6))
+		await get_tree().create_timer(0.05 + i * 0.006).timeout
+	var r := randi_range(1, 6)
+	num.text = str(r) if bonus == 0 else "%d + %d = %d" % [r, bonus, r + bonus]
+	rb.queue_free()
+	await get_tree().create_timer(0.5).timeout
+	return r + bonus
 
 func battle_finish(result: String, win: bool) -> void:
 	if fast:

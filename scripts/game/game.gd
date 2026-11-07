@@ -73,6 +73,11 @@ var _press_pos := Vector2.ZERO
 var _dragging := false
 var _touches := {}
 var _pinch_d := 0.0
+var _rot := false
+var _two_mid := Vector2.ZERO
+const YAW_LIMIT := 0.6
+const PITCH_MIN := 0.55
+const PITCH_MAX := 1.25
 
 # ================================================================= СОЗДАНИЕ
 func _ready() -> void:
@@ -185,6 +190,8 @@ func _spawn_objects() -> void:
 			"event":
 				n = Models.event_stone()
 		n.position = map.world_pos(p)
+		if d["type"] == "campfire":
+			n.position += Vector3(0.5, 0, 0.5)
 		entities.add_child(n)
 		d["node"] = n
 		objects[p] = d
@@ -244,7 +251,7 @@ func _setup_players() -> void:
 			"hp": MAX_HP, "pos": start, "shards": 0, "hand": hand, "items": ["potion"],
 			"dot": 0, "skip_move": 0, "slow": 0, "skip_turn": 0, "block_traps": 0, "vuln": 0,
 			"now_skip_move": false, "now_slow": 0, "now_block_traps": false, "now_vuln": false,
-			"marks": {}, "campfire": start, "pet": pc.get("pet", false), "reports": [],
+			"marks": {}, "campfire": start, "warm_round": -1, "pet": pc.get("pet", false), "reports": [],
 			"discovered": {}, "explored": _initial_explored(), "die": "D6", "node": node, "lantern": lantern, "trail": [],
 		})
 
@@ -327,18 +334,18 @@ func _process(delta: float) -> void:
 		var dir := Vector3(sin(fp_yaw) * cos(fp_pitch), sin(fp_pitch), cos(fp_yaw) * cos(fp_pitch))
 		cam.position = cam.position.lerp(head - dir * 0.1, 1.0 - exp(-delta * 10.0))
 		cam.look_at(cam.position + dir, Vector3.UP)
-		cam.fov = lerpf(cam.fov, 72.0, delta * 6.0)
+		cam.fov = lerpf(cam.fov, 72.0, minf(delta * 6.0, 1.0))
 	else:
 		var off := Vector3(sin(cam_yaw) * cos(cam_pitch), sin(cam_pitch), -cos(cam_yaw) * cos(cam_pitch)) * cam_dist
 		cam.position = cam_target + off
 		cam.look_at(cam_target + Vector3(0, 0.4, 0), Vector3.UP)
-		cam.fov = lerpf(cam.fov, 50.0, delta * 6.0)
+		cam.fov = lerpf(cam.fov, 50.0, minf(delta * 6.0, 1.0))
 	if rain.emitting:
 		rain.position = cam_target + Vector3(0, 9, 3)
 	if info.get("foliage_mat"):
 		var fm: ShaderMaterial = info["foliage_mat"]
 		var w: float = fm.get_shader_parameter("wind") if fm.get_shader_parameter("wind") != null else 0.3
-		fm.set_shader_parameter("wind", lerpf(w, wind, delta))
+		fm.set_shader_parameter("wind", lerpf(w, wind, minf(delta, 1.0)))
 
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventScreenTouch:
@@ -349,6 +356,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		if _touches.size() == 2:
 			var ps := _touches.values()
 			_pinch_d = (ps[0] as Vector2).distance_to(ps[1])
+			_two_mid = ((ps[0] as Vector2) + (ps[1] as Vector2)) * 0.5
 			_press = false
 		return
 	if e is InputEventScreenDrag:
@@ -359,6 +367,9 @@ func _unhandled_input(e: InputEvent) -> void:
 			if _pinch_d > 0.0:
 				_zoom(_pinch_d / d)
 			_pinch_d = d
+			var mid := ((ps[0] as Vector2) + (ps[1] as Vector2)) * 0.5
+			_tilt(mid - _two_mid)
+			_two_mid = mid
 			_press = false
 		return
 	if e is InputEventMouseButton:
@@ -371,10 +382,14 @@ func _unhandled_input(e: InputEvent) -> void:
 				if _press and not _dragging:
 					_on_click(e.position)
 				_press = false
+		elif e.button_index == MOUSE_BUTTON_RIGHT:
+			_rot = e.pressed
 		elif e.button_index == MOUSE_BUTTON_WHEEL_UP and e.pressed:
 			_zoom(0.9)
 		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN and e.pressed:
 			_zoom(1.1)
+	elif e is InputEventMouseMotion and _rot:
+		_tilt(e.relative)
 	elif e is InputEventMouseMotion and _press:
 		if not _dragging and e.position.distance_to(_press_pos) > 14.0:
 			_dragging = true
@@ -389,8 +404,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		_zoom(1.0 / e.factor)
 	elif e is InputEventKey and e.pressed:
 		match e.keycode:
-			KEY_Q: cam_yaw -= 0.2
-			KEY_E: cam_yaw += 0.2
+			KEY_Q: _tilt(Vector2(50, 0))
+			KEY_E: _tilt(Vector2(-50, 0))
 			KEY_SPACE: _focus_current()
 
 func _set_view(first: bool, save: bool) -> void:
@@ -402,6 +417,13 @@ func _set_view(first: bool, save: bool) -> void:
 		Settings.set_pref(players[cur].name, "view", "first" if first else "third")
 	refresh_view()
 	hud.refresh()
+
+## Немного повернуть/наклонить камеру (не на 360°, а чуть-чуть в стороны).
+func _tilt(rel: Vector2) -> void:
+	if view_first or _in_fight:
+		return
+	cam_yaw = clampf(cam_yaw - rel.x * 0.004, -YAW_LIMIT, YAW_LIMIT)
+	cam_pitch = clampf(cam_pitch + rel.y * 0.003, PITCH_MIN, PITCH_MAX)
 
 func _zoom(f: float) -> void:
 	cam_dist = clampf(cam_dist * f, 4.0, 28.0)
@@ -420,6 +442,9 @@ func _pan(rel: Vector2) -> void:
 
 func _focus_current() -> void:
 	follow = players[cur].node
+	var tw := create_tween()
+	tw.tween_property(self, "cam_yaw", 0.0, 0.4)
+	tw.parallel().tween_property(self, "cam_pitch", deg_to_rad(50.0), 0.4)
 
 func _pick(sp: Vector2) -> Vector2i:
 	var from := cam.project_ray_origin(sp)
@@ -874,7 +899,7 @@ func _recalc() -> void:
 			prev[n] = c
 			var o = objects.get(n)
 			var blocked := false
-			if o != null and o["type"] == "beast":
+			if o != null and o["type"] in ["beast", "chest", "event"]:
 				blocked = true
 			var opp := _player_at(n, cur)
 			if opp >= 0 and can_see(p, n):
@@ -905,6 +930,9 @@ func _show_reach() -> void:
 		var col := Color(0.25, 0.8, 1.0, 0.55)
 		if targets.has(t):
 			col = Color(1.0, 0.25, 0.2, 0.65)
+			var ob = objects.get(t)
+			if ob != null and ob["type"] in ["chest", "event"]:
+				col = Color(1.0, 0.8, 0.2, 0.65)
 		items.append([t, col])
 	_set_highlight(items)
 
@@ -945,6 +973,13 @@ func _walk(path: Array) -> void:
 		var tile: Vector2i = step
 		var c: int = map.cost(tile)
 		var o = objects.get(tile)
+		if o != null and o["type"] in ["chest", "event"]:
+			# к сундукам и камням подходим вплотную, а не наступаем на них
+			_face(p, tile)
+			steps_left -= c
+			p.node.set("walking", false)
+			await _use_object(p, tile, o)
+			break
 		if o != null and o["type"] == "beast":
 			_face(p, tile)
 			steps_left -= c
@@ -994,7 +1029,37 @@ func _walk(path: Array) -> void:
 func _on_enter(p: Dictionary, tile: Vector2i) -> bool:
 	var stop := false
 	var o = objects.get(tile)
-	if o != null:
+	if o != null and o["type"] == "shard":
+		await _use_object(p, tile, o)
+	var cf := _campfire_near(tile)
+	if cf.x >= 0:
+		p.campfire = tile
+		if p.warm_round != round_no:
+			p.warm_round = round_no
+			p.hp = mini(MAX_HP, p.hp + 3)
+			_float_text(p.node, "+3 HP", Style.GREEN)
+			hud.toast("Костёр согрел тебя: +3 HP. Здесь ты очнёшься, если лишишься сил.", Color("ffb070"), 3.0)
+	var hit: Array = []
+	for tr in traps:
+		if tr["pos"] == tile and tr["owner"] != cur:
+			hit.append(tr)
+	for tr in hit:
+		await _trigger_trap(tr, p)
+		stop = true
+	return stop
+
+## Костёр стоит на стыке 4 клеток; греются на любой из них.
+func _campfire_near(tile: Vector2i) -> Vector2i:
+	for c in map.campfires:
+		var d: Vector2i = tile - c
+		if d.x >= 0 and d.x <= 1 and d.y >= 0 and d.y <= 1:
+			return c
+	return Vector2i(-1, -1)
+
+## Сундук, камень «?» или осколок. Возвращает true, если ход нужно остановить.
+func _use_object(p: Dictionary, tile: Vector2i, o: Dictionary) -> bool:
+	var stop := false
+	if true:
 		match o["type"]:
 			"shard":
 				Settings.play("shard")
@@ -1028,17 +1093,6 @@ func _on_enter(p: Dictionary, tile: Vector2i) -> bool:
 				_remove_object(tile)
 				await _event(p)
 				stop = true
-			"campfire":
-				p.campfire = tile
-				hud.toast("Костёр согрел тебя: +3 HP. Здесь ты очнёшься, если лишишься сил.", Color("ffb070"), 3.0)
-				p.hp = mini(MAX_HP, p.hp + 3)
-	var hit: Array = []
-	for tr in traps:
-		if tr["pos"] == tile and tr["owner"] != cur:
-			hit.append(tr)
-	for tr in hit:
-		await _trigger_trap(tr, p)
-		stop = true
 	return stop
 
 func _remove_object(t: Vector2i) -> void:
@@ -1341,9 +1395,9 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 	_face_node(q.node, p.node.position)
 	_begin_fight(p.node, q.node)
 	var forest: bool = map.get_t(q.pos) == MapGen.FOREST
-	var r: Dictionary = await hud.battle(p.name, q.name, "Соперник бросит кубик сам" + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true, p.color)
+	var r: Dictionary = await hud.battle(p.name, q.name, "Потом %s сам бросит кубик" % q.name + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true, p.color)
 	var a := int(r["total"])
-	var d := rng.randi_range(1, 6) + (1 if forest else 0)
+	var d: int = await hud.extra_roll(q.name, q.color, 1 if forest else 0)
 	var res := "Ничья: %d против %d. Оба −1 HP" % [a, d]
 	if a > d:
 		res = "%s побеждает: %d против %d!" % [p.name, a, d]

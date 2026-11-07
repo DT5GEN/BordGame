@@ -10,7 +10,7 @@ var music_vol := 0.6
 var sfx_vol := 0.8
 var music_folder := ""
 var shuffle := true
-var eco := false
+var eco := true
 var prefs := {}          # имя игрока -> {"view": "third"/"first", "music": true}
 
 var music: AudioStreamPlayer
@@ -59,7 +59,8 @@ func _load() -> void:
 	sfx_vol = cf.get_value("audio", "sfx_vol", sfx_vol)
 	music_folder = cf.get_value("audio", "music_folder", music_folder)
 	shuffle = cf.get_value("audio", "shuffle", shuffle)
-	eco = cf.get_value("video", "eco", eco)
+	if int(cf.get_value("meta", "version", 1)) >= 2:
+		eco = cf.get_value("video", "eco", eco)
 	prefs = cf.get_value("players", "prefs", {})
 
 func save() -> void:
@@ -69,6 +70,7 @@ func save() -> void:
 	cf.set_value("audio", "music_folder", music_folder)
 	cf.set_value("audio", "shuffle", shuffle)
 	cf.set_value("video", "eco", eco)
+	cf.set_value("meta", "version", 2)
 	cf.set_value("players", "prefs", prefs)
 	cf.save(PATH)
 
@@ -82,6 +84,7 @@ func apply_volumes() -> void:
 
 func apply_video() -> void:
 	Engine.max_fps = 30 if eco else 60
+	get_tree().root.msaa_3d = Viewport.MSAA_DISABLED if eco else Viewport.MSAA_2X
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 
 func set_music_enabled(on: bool) -> void:

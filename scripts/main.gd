@@ -191,9 +191,11 @@ func _autotest() -> void:
 	hero.node.position = g.map.world_pos(adj)
 	g.refresh_view()
 	g._fight_beast(hero, wolf_t, g.objects[wolf_t])
-	await _wait(1.3)
+	await _wait(1.0)
+	await _shot("15a2_battle_prep")
+	await _wait(1.9)
 	await _shot("15b_battle_qte")
-	var qte = _find(g.hud.alert_panel, "QTE")
+	var qte = g.hud.current_qte
 	if qte:
 		qte.press()
 	await _wait(1.6)

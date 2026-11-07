@@ -75,7 +75,7 @@ func _ready() -> void:
 		Settings.save())
 	v.add_child(sh)
 	var eco := CheckBox.new()
-	eco.text = "Экономия заряда и нагрева (30 кадров в секунду)"
+	eco.text = "Экономия заряда и нагрева (30 кадров, без сглаживания)"
 	eco.button_pressed = Settings.eco
 	eco.add_theme_font_size_override("font_size", 19)
 	eco.toggled.connect(func(on):

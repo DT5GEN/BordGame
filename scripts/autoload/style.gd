@@ -106,6 +106,12 @@ func outlined(l: Label, outline: int = 6, col: Color = Color(0, 0, 0, 0.75)) -> 
 	l.add_theme_color_override("font_outline_color", col)
 	return l
 
+func glass_button(b: Button, accent: Color = GOLD) -> Button:
+	b.add_theme_stylebox_override("normal", sb(GLASS, Color(accent, 0.5), 2, 12, 8))
+	b.add_theme_stylebox_override("hover", sb(Color(0.16, 0.11, 0.07, 0.75), accent, 2, 12, 8))
+	b.add_theme_stylebox_override("pressed", sb(Color(0.05, 0.03, 0.02, 0.8), accent, 2, 12, 8))
+	return b
+
 func button(text: String, size: int = 22, min_w: int = 0) -> Button:
 	var b := Button.new()
 	b.text = text

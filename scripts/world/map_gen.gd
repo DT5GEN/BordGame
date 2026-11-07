@@ -236,6 +236,26 @@ func find_free(near: Vector2i, allow_forest := true, prefer: int = -1) -> Vector
 					return p
 	return Vector2i(-1, -1)
 
+const CAMP_TILES := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]
+
+## Костёр ставится на стык 4 клеток — все 4 должны быть свободной землёй.
+func _find_camp(near: Vector2i) -> Vector2i:
+	for r in range(0, 12):
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if maxi(absi(dx), absi(dz)) != r:
+					continue
+				var p := near + Vector2i(dx, dz)
+				var ok := true
+				for d in CAMP_TILES:
+					var q: Vector2i = p + d
+					if not inb(q) or not _free(q, false) or get_t(q) == HILL:
+						ok = false
+						break
+				if ok:
+					return p
+	return Vector2i(-1, -1)
+
 func _take(p: Vector2i) -> void:
 	_taken[p] = true
 
@@ -245,11 +265,12 @@ func _place_objects(np: int) -> void:
 		var sp := Vector2i(int(round((i + 1.0) * w / (np + 1.0))), 1)
 		starts.append(sp)
 		_take(sp)
-	for row in [4, rivers[0] + 4, rivers[1] + 4, gorge.x - 3]:
-		var cp := find_free(Vector2i(w / 2 + rng.randi_range(-3, 3), row), false)
+	for row in [4, rivers[0] + 4, rivers[1] + 4, gorge.x - 4]:
+		var cp := _find_camp(Vector2i(w / 2 + rng.randi_range(-3, 3), row))
 		if cp.x >= 0:
 			campfires.append(cp)
-			_take(cp)
+			for d in CAMP_TILES:
+				_take(cp + d)
 			objects.append({"type": "campfire", "pos": cp})
 	# Осколки — больше, чем игроков
 	var n_shards := maxi(5, np + 2)
