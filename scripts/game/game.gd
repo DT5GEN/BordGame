@@ -3,6 +3,7 @@ extends Node3D
 
 signal exit_to_menu
 signal restart_game
+signal cmd_done(seq: int)
 
 const MapGen = preload("res://scripts/world/map_gen.gd")
 const Models = preload("res://scripts/world/models.gd")
@@ -74,6 +75,21 @@ var hud
 var papyrus
 var _time_shown := 8.0
 
+# --- сеть (все клиенты считают одну партию по общему зерну и одинаковому списку действий)
+var net := false
+var my_seat := -1
+var replaying := false
+var _q: Array = []
+var _flow := false
+var _echo_wait := false
+var _last_seq := 0
+var _offline := {}
+var _caught := true
+var _seat_of := {}
+var v_explored := {}
+var v_discovered := {}
+var _net_over_banner: Label = null
+
 var _press := false
 var _press_pos := Vector2.ZERO
 var _dragging := false
@@ -90,11 +106,19 @@ const PITCH_MAX := 1.25
 # ================================================================= СОЗДАНИЕ
 func _ready() -> void:
 	rng.randomize()
+	net = cfg.get("net", false)
+	my_seat = int(cfg.get("my_seat", -1))
+	replaying = cfg.get("replay", false)
+	_caught = not replaying
 	var sz: Vector2i = cfg.get("size", Vector2i(28, 64))
 	map = MapGen.new()
 	map_code = int(cfg.get("seed", 0))
 	if map_code <= 0:
 		map_code = rng.randi_range(10000, 99999)
+	if net:
+		rng.seed = map_code * 7919 + 17   # у всех клиентов одинаковая «случайность»
+		for i in cfg["players"].size():
+			_seat_of[int(cfg["players"][i]["cid"])] = i
 	map.generate(sz.x, sz.y, map_code, cfg["players"].size())
 	_setup_env()
 	var tiles := Node3D.new()
@@ -121,14 +145,14 @@ func _ready() -> void:
 	settings_panel = SettingsPanel.new()
 	add_child(settings_panel)
 	settings_panel.view_changed.connect(func(first): _set_view(first, false))
-	hud.settings_requested.connect(func(): settings_panel.open(players[cur].name))
+	hud.settings_requested.connect(func(): settings_panel.open(players[viewer()].name))
 	hud.view_toggle_requested.connect(func(): _set_view(not view_first, true))
-	hud.roll_requested.connect(roll)
-	hud.end_turn_requested.connect(end_turn)
+	hud.roll_requested.connect(func(_d): _cmd({"k": "roll"}))
+	hud.end_turn_requested.connect(func(): _cmd({"k": "end"}))
 	hud.trap_card_chosen.connect(start_trap_mode)
 	hud.summon_chosen.connect(start_summon_mode)
-	hud.reroll_requested.connect(reroll)
-	hud.item_used.connect(use_item)
+	hud.reroll_requested.connect(func(): _cmd({"k": "reroll"}))
+	hud.item_used.connect(func(i): _cmd({"k": "item", "i": i}))
 	hud.pass_ready.connect(_turn_start_effects)
 	hud.help_requested.connect(func(): papyrus.open())
 	hud.focus_requested.connect(_focus_current)
@@ -138,10 +162,27 @@ func _ready() -> void:
 	hud.battle_event.connect(_on_battle_event)
 	_set_time_visual(hour)
 	_roll_weather()
-	cam_target = players[0].node.position + Vector3(0, 0, 6)
-	begin_turn()
+	cam_target = players[viewer()].node.position + Vector3(0, 0, 6)
 	if cfg.get("show_rules", false):
 		papyrus.open()
+	if net:
+		Net.act.connect(_on_net_act)
+		Net.caught_up.connect(_on_caught_up)
+		Net.status.connect(func(t): hud.toast(t, Style.GOLD, 2.5))
+		hud.skip_requested.connect(func(): Net.send_act({"k": "skip"}))
+		_flow = true
+		await begin_turn()
+		_flow = false
+	else:
+		begin_turn()
+
+func _exit_tree() -> void:
+	if net:
+		Engine.time_scale = 1.0
+		if Net.act.is_connected(_on_net_act):
+			Net.act.disconnect(_on_net_act)
+		Net.leave()
+		DB.restore_own_balance()
 
 func _setup_env() -> void:
 	var we := WorldEnvironment.new()
@@ -224,6 +265,8 @@ func _setup_players() -> void:
 			team_n[int(pc.get("team", 0))] += 1
 		if team_n[0] == 0 or team_n[1] == 0:
 			team_mode = false
+	if net:
+		v_explored = _initial_explored()
 	var team_explored := [_initial_explored(), _initial_explored()]
 	var team_discovered := [{}, {}]
 	var used := {}
@@ -283,7 +326,7 @@ func _setup_players() -> void:
 		if ab_id == "beast":
 			start_items.append("meat")
 		players.append({
-			"name": pc["name"], "slot": pc.get("slot", i), "hero": pc["hero"], "color": DB.PLAYER_COLORS[i],
+			"idx": i, "name": pc["name"], "slot": pc.get("slot", i), "hero": pc["hero"], "color": DB.PLAYER_COLORS[i],
 			"hp": hp_max, "max_hp": hp_max, "dmg_mult": kb, "step_mult": 1.0 + (kb - 1.0) * 0.5,
 			"ability": ab_id, "summons": [rng.randi_range(0, DB.summons.size() - 1)], "bonus_done": false,
 			"rerolled": false, "moved": false, "block_summon": 0, "now_block_summon": false,
@@ -337,8 +380,9 @@ func team_shards(p: Dictionary) -> int:
 func team_name(team: int) -> String:
 	return ["Красные", "Синие"][team]
 
-func team_sees(t: Vector2i) -> bool:
-	for j in allies_of(cur):
+func team_sees(t: Vector2i, who := -1) -> bool:
+	var w: int = cur if who < 0 else who
+	for j in allies_of(w):
 		if can_see(players[j], t):
 			return true
 	return false
@@ -416,11 +460,16 @@ func _process(delta: float) -> void:
 	if _press and not _dragging and Time.get_ticks_msec() - _press_t > 550:
 		_press = false
 		_on_long_press(_press_pos)
+	if net:
+		Engine.time_scale = 4.0 if _q.size() > 8 else 1.0
+		_pump()
+		if follow != null and is_instance_valid(follow) and not follow.visible and my_seat >= 0:
+			follow = players[my_seat].node
 	if follow != null and is_instance_valid(follow):
 		cam_goal = follow.position
 	cam_target = cam_target.lerp(cam_goal, 1.0 - exp(-delta * 4.0))
 	if view_first and not _in_fight and not game_over:
-		var n: Node3D = players[cur].node
+		var n: Node3D = players[viewer()].node
 		var head := n.position + Vector3(0, 0.95, 0)
 		var dir := Vector3(sin(fp_yaw) * cos(fp_pitch), sin(fp_pitch), cos(fp_yaw) * cos(fp_pitch))
 		cam.position = cam.position.lerp(head - dir * 0.1, 1.0 - exp(-delta * 10.0))
@@ -510,10 +559,10 @@ func _unhandled_input(e: InputEvent) -> void:
 func _set_view(first: bool, save: bool) -> void:
 	view_first = first
 	if first:
-		fp_yaw = players[cur].node.rotation.y
+		fp_yaw = players[viewer()].node.rotation.y
 		fp_pitch = -0.35
 	if save:
-		Settings.set_pref(players[cur].name, "view", "first" if first else "third")
+		Settings.set_pref(players[viewer()].name, "view", "first" if first else "third")
 	refresh_view()
 	hud.refresh()
 
@@ -540,7 +589,7 @@ func _pan(rel: Vector2) -> void:
 	cam_goal.z = clampf(cam_goal.z, -4, map.h + 2)
 
 func _focus_current() -> void:
-	follow = players[cur].node
+	follow = players[viewer()].node
 	var tw := create_tween()
 	tw.tween_property(self, "cam_yaw", 0.0, 0.4)
 	tw.parallel().tween_property(self, "cam_pitch", deg_to_rad(50.0), 0.4)
@@ -567,22 +616,25 @@ func _on_click(sp: Vector2) -> void:
 	var t := _pick(sp)
 	if not map.inb(t):
 		return
+	if net and (cur != my_seat or _echo_wait):
+		_tile_hint(t)
+		return
 	if mode == "trap":
 		if trap_targets.has(t):
-			_place_trap(t)
+			_cmd({"k": "trap", "h": pending_card, "t": [t.x, t.y]})
 		return
 	if mode == "summon":
 		if summon_targets.has(t):
-			_place_summon(t)
+			_cmd({"k": "summon", "h": pending_summon, "t": [t.x, t.y]})
 		return
 	if rolled and reach.has(t):
-		_walk(_path_to(t))
+		_cmd({"k": "walk", "t": [t.x, t.y]})
 	else:
 		_tile_hint(t)
 
 func _tile_hint(t: Vector2i) -> void:
 	var tt: int = map.get_t(t)
-	if not players[cur].explored.has(t):
+	if not _vx().has(t):
 		hud.toast("Неизведанная земля. Подойди ближе, чтобы разглядеть.", Style.PARCH, 2.0)
 		return
 	var txt: String = MapGen.NAMES[tt]
@@ -595,7 +647,7 @@ func _tile_hint(t: Vector2i) -> void:
 	else:
 		txt += " — не пройти"
 	var o = objects.get(t)
-	if o != null and _object_visible(o, players[cur]):
+	if o != null and _object_visible(o, players[viewer()]):
 		match o["type"]:
 			"beast":
 				txt += ". Здесь %s (сила %d)" % [DB.beasts[o["kind"]]["name"], int(DB.beasts[o["kind"]]["power"])]
@@ -605,16 +657,176 @@ func _tile_hint(t: Vector2i) -> void:
 			"shard": txt += ". Осколок!"
 			"event": txt += ". Загадочный камень"
 			"campfire": txt += ". Костёр — точка возрождения"
-	if not rolled:
+	if not rolled and (not net or cur == my_seat):
 		txt += "   (сначала брось кубик)"
 	hud.toast(txt, Style.PARCH, 2.0)
+
+# ================================================================= СЕТЬ
+const DEFAULT_BATTLE := {"blocked": false, "bonus": -1, "roll": 1, "total": 1}
+
+## Команда игрока из интерфейса. По сети уходит на сервер и выполняется у всех одновременно, в одном порядке.
+func _cmd(a: Dictionary) -> void:
+	if not net:
+		await _exec(a)
+		return
+	if cur != my_seat or _echo_wait or game_over or replaying:
+		return
+	_echo_wait = true
+	Net.send_act(a)
+
+func _exec(a: Dictionary) -> void:
+	match str(a.get("k", "")):
+		"roll":
+			await roll(game_die)
+		"reroll":
+			await reroll()
+		"end":
+			await end_turn()
+		"item":
+			use_item(int(a["i"]))
+		"trap":
+			_place_trap(Vector2i(int(a["t"][0]), int(a["t"][1])), int(a["h"]))
+		"summon":
+			_place_summon(Vector2i(int(a["t"][0]), int(a["t"][1])), int(a["h"]))
+		"walk":
+			var t := Vector2i(int(a["t"][0]), int(a["t"][1]))
+			if rolled and reach.has(t) and not busy:
+				await _walk(_path_to(t))
+		"press":
+			await _long_press_tile(Vector2i(int(a["t"][0]), int(a["t"][1])))
+		"skip":
+			busy = false
+			await end_turn()
+
+func _on_net_act(m: Dictionary) -> void:
+	var seq := int(m.get("seq", 0))
+	if seq <= _last_seq:
+		return           # после переподключения сервер присылает всё заново
+	_last_seq = seq
+	_q.append(m)
+
+func _on_caught_up() -> void:
+	_caught = true
+
+func _sys_act(m: Dictionary) -> bool:
+	var a: Dictionary = m["a"]
+	if str(a.get("k", "")) != "presence":
+		return false
+	var seat: int = _seat_of.get(int(a["cid"]), -1)
+	if seat >= 0:
+		if bool(a["online"]):
+			_offline.erase(seat)
+		else:
+			_offline[seat] = true
+		_update_offline_banner()
+	return true
+
+func _update_offline_banner() -> void:
+	if not _offline.has(cur) or game_over:
+		hud.set_offline(-1)
+	else:
+		hud.set_offline(cur)
+
+## Раздаёт полученные действия по порядку, когда предыдущее закончилось.
+func _pump() -> void:
+	if _flow or _q.is_empty():
+		if replaying and _caught and _q.is_empty() and not _flow:
+			replaying = false
+			hud.refresh()
+		return
+	var m: Dictionary = _q[0]
+	var a: Dictionary = m["a"]
+	var k := str(a.get("k", ""))
+	if k == "presence":
+		_q.pop_front()
+		_sys_act(m)
+		return
+	if k == "res":
+		_q.pop_front()      # лишний ответ без вопроса — выбрасываем, чтобы не застрять
+		return
+	_q.pop_front()
+	var seat: int = _seat_of.get(int(m.get("cid", -1)), -1)
+	if seat == my_seat:
+		_echo_wait = false
+	if k == "skip":
+		if not _offline.has(cur) or game_over:
+			return
+	elif seat != cur or game_over:
+		return
+	_flow = true
+	await _exec(a)
+	_flow = false
+	if _echo_wait and seat == my_seat:
+		_echo_wait = false
+	cmd_done.emit(int(m.get("seq", 0)))
+
+## Короткий «отпечаток» партии — для проверки, что у всех клиентов всё совпало.
+func state_digest() -> String:
+	var parts: Array = ["r%d" % round_no, "c%d" % cur, "h%.1f" % hour, "rng%d" % rng.state]
+	for q in players:
+		parts.append("%s:%d,%d:hp%d:s%d:t%d:i%d:w%d" % [q.name, q.pos.x, q.pos.y, q.hp, q.shards, q.hand.size(), q.items.size(), q.wolves])
+	parts.append("u%d" % units.size())
+	parts.append("tr%d" % traps.size())
+	parts.append("o%d" % objects.size())
+	return "|".join(parts)
+
+## Решение игрока посреди хода (бой, выбор, бонусные карты).
+## Тот, чей это ход, решает у себя на экране и отправляет ответ; остальные ждут его и видят то же самое.
+func _ask(seat: int, kind: String, ui: Callable, wait_text: String, default: Variant, battle_fx := false) -> Variant:
+	if not net:
+		return await ui.call()
+	var live := seat == my_seat and not replaying and not _res_ready()
+	if live:
+		var r = await ui.call()
+		Net.send_act({"k": "res", "id": kind, "v": r})
+	elif wait_text != "" and not _res_ready():
+		hud.show_wait(wait_text)
+	var v = await _wait_res(seat, default)
+	if not live:
+		hud.hide_wait()
+		if battle_fx and typeof(v) == TYPE_DICTIONARY:
+			await hud.replay_battle(v)
+	return v
+
+func _res_ready() -> bool:
+	for m in _q:
+		var k := str(m["a"].get("k", ""))
+		if k == "res":
+			return true
+		if k != "presence":
+			return false
+	return false
+
+func _wait_res(seat: int, default: Variant) -> Variant:
+	while true:
+		if not _q.is_empty():
+			var m: Dictionary = _q[0]
+			var k := str(m["a"].get("k", ""))
+			if k == "res":
+				_q.pop_front()
+				return m["a"].get("v")
+			if k == "presence":
+				_q.pop_front()
+				_sys_act(m)
+				continue
+		if _offline.has(seat) or game_over:
+			return default
+		await get_tree().process_frame
+	return default
 
 # ================================================================= ХОДЫ
 func current() -> Dictionary:
 	return players[cur]
 
+func viewer() -> int:
+	return my_seat if net and my_seat >= 0 else cur
+
+func is_passive() -> bool:
+	return net and (cur != my_seat or replaying)
+
 func begin_turn() -> void:
 	var p: Dictionary = players[cur]
+	var V := viewer()
 	rolled = false
 	steps_left = 0
 	mode = "move"
@@ -622,23 +834,39 @@ func begin_turn() -> void:
 	p.moved = false
 	_clear_highlight()
 	follow = p.node
-	var pr: Dictionary = Settings.pref(p.name)
-	view_first = pr["view"] == "first"
-	fp_yaw = p.node.rotation.y
+	var pr: Dictionary = Settings.pref(players[V].name)
+	if not net or turn_count_started() == 0:
+		view_first = pr["view"] == "first"
+		Settings.set_music_enabled(pr["music"])
+	fp_yaw = players[V].node.rotation.y
 	fp_pitch = -0.35
-	Settings.set_music_enabled(pr["music"])
 	refresh_view()
+	if net:
+		_update_offline_banner()
+	if net and not p.node.visible:
+		follow = players[V].node
 	_update_shrine_sockets()
 	hud.set_phase("wait")
 	hud.refresh()
 	var reports: Array = p.reports.duplicate()
 	p.reports.clear()
-	if players.size() > 1:
+	if net:
+		if cur == my_seat and not replaying:
+			for r in reports:
+				hud.toast(r, Style.GOLD, 4.0)
+		await _turn_start_effects()
+	elif players.size() > 1:
 		hud.show_pass(p, reports)
 	else:
 		for r in reports:
 			hud.toast(r, Style.GOLD, 4.0)
 		_turn_start_effects()
+
+var _turns_begun := 0
+func turn_count_started() -> int:
+	var n := _turns_begun
+	_turns_begun += 1
+	return n
 
 func _turn_start_effects() -> void:
 	var p: Dictionary = players[cur]
@@ -669,7 +897,7 @@ func _turn_start_effects() -> void:
 		p.skip_turn -= 1
 		hud.toast("Ловушка времени: этот ход пропущен", Style.RED, 2.5)
 		await get_tree().create_timer(1.6).timeout
-		end_turn()
+		await end_turn()
 		return
 	await _units_act(cur)
 	if game_over:
@@ -766,7 +994,7 @@ func end_turn() -> void:
 	cur = (cur + 1) % players.size()
 	if cur == 0:
 		_advance_round()
-	begin_turn()
+	await begin_turn()
 
 func _advance_round() -> void:
 	round_no += 1
@@ -914,19 +1142,50 @@ func can_see(p: Dictionary, t: Vector2i) -> bool:
 		r -= 1
 	return d <= r
 
+## Что клиент рисует: у каждого игрока по сети своя «карта знаний».
+func _vx() -> Dictionary:
+	return v_explored if net else players[cur].explored
+
+func _vd() -> Dictionary:
+	return v_discovered if net else players[cur].discovered
+
 func _object_visible(o: Dictionary, p: Dictionary) -> bool:
 	var pos: Vector2i = o["pos"]
+	var ex: Dictionary = p.explored
+	var di: Dictionary = p.discovered
+	if net and p.idx == viewer():
+		ex = v_explored
+		di = v_discovered
 	match o["type"]:
 		"campfire", "chest", "event":
-			return p.explored.has(pos)
-	return p.discovered.has(pos) or team_sees(pos)
+			return ex.has(pos)
+	return di.has(pos) or team_sees(pos, p.idx)
 
 ## Туман войны: видимое — ярко, разведанное — тусклее, рядом с обзором — дымка с силуэтами, дальше — тьма.
 func refresh_view() -> void:
-	var p: Dictionary = players[cur]
+	var V := viewer()
+	var p: Dictionary = players[V]
 	var r := vision(p)
+	var vx: Dictionary = _vx()
+	var vd: Dictionary = _vd()
+	if net:
+		# «логические» знания ходящего — одинаковые у всех клиентов
+		var pc: Dictionary = players[cur]
+		for j in allies_of(cur):
+			var qc: Dictionary = players[j]
+			var rc := vision(qc)
+			for dz in range(-rc, rc + 1):
+				for dx in range(-rc, rc + 1):
+					var ec: Vector2i = qc.pos + Vector2i(dx, dz)
+					if map.inb(ec):
+						pc.explored[ec] = true
+		for t in objects:
+			if objects[t]["type"] in ["beast", "shard"] and team_sees(t, cur):
+				pc.discovered[t] = true
+		if pc.ability == "seeker":
+			_seeker(pc, pc.explored, pc.discovered, false)
 	var viewers: Array = []
-	for j in allies_of(cur):
+	for j in allies_of(V):
 		var q: Dictionary = players[j]
 		var rq := vision(q)
 		viewers.append([q.pos, rq])
@@ -934,7 +1193,7 @@ func refresh_view() -> void:
 			for dx in range(-rq, rq + 1):
 				var e: Vector2i = q.pos + Vector2i(dx, dz)
 				if map.inb(e):
-					p.explored[e] = true
+					vx[e] = true
 	var refs: Dictionary = info["tile_ref"]
 	var decor: Dictionary = info["decor_ref"]
 	var fog_items: Array = []
@@ -949,7 +1208,7 @@ func refresh_view() -> void:
 			margin = mini(margin, maxi(absi(tp.x - vp.x), absi(tp.y - vp.y)) - int(vw[1]))
 		var k := 1.0
 		if margin > 0:
-			if p.explored.has(tp):
+			if vx.has(tp):
 				k = 0.6
 			else:
 				k = 0.4
@@ -963,32 +1222,37 @@ func refresh_view() -> void:
 	_set_fog(fog_items)
 	for bt in info["bridge_nodes"]:
 		var bd := maxi(absi(bt.x - p.pos.x), absi(bt.y - p.pos.y))
-		info["bridge_nodes"][bt].visible = p.explored.has(bt) or bd <= r + 2
+		info["bridge_nodes"][bt].visible = vx.has(bt) or bd <= r + 2
 	if p.ability == "seeker":
-		for t in objects:
-			if objects[t]["type"] == "shard" and _cheb(t, p.pos) <= r + 3 and not p.explored.has(t):
-				p.explored[t] = true
-				p.discovered[t] = true
-				if not p.get("seeker_told", {}).has(t):
-					var told: Dictionary = p.get("seeker_told", {})
-					told[t] = true
-					p["seeker_told"] = told
-					hud.toast("Чутьё на кристаллы: рядом сияет осколок!", Style.TEAL, 2.5)
+		_seeker(p, vx, vd, true)
 	for t in objects:
 		var o: Dictionary = objects[t]
-		if o["type"] in ["beast", "shard"] and team_sees(t):
-			p.discovered[t] = true
+		if o["type"] in ["beast", "shard"] and team_sees(t, V):
+			vd[t] = true
 		o["node"].visible = _object_visible(o, p)
 	for i in players.size():
-		var q: Dictionary = players[i]
-		var vis: bool = i == cur or not is_enemy(cur, i) or team_sees(q.pos) or p.marks.has(i)
-		q.node.visible = vis and not (i == cur and view_first)
-		q.node.get_node("Ring").visible = i == cur
+		var q2: Dictionary = players[i]
+		var vis: bool = i == V or not is_enemy(V, i) or team_sees(q2.pos, V) or p.marks.has(i)
+		q2.node.visible = vis and not (i == V and view_first)
+		q2.node.get_node("Ring").visible = i == cur
 	for tr in traps:
-		tr["node"].visible = not is_enemy(cur, tr["owner"])
+		tr["node"].visible = not is_enemy(V, tr["owner"])
 	for u in units:
-		u["node"].visible = not is_enemy(cur, u["owner"]) or team_sees(u["pos"])
+		u["node"].visible = not is_enemy(V, u["owner"]) or team_sees(u["pos"], V)
 	_update_lights()
+
+## Чутьё на кристаллы: осколки рядом отмечаются на карте.
+func _seeker(pl: Dictionary, ex: Dictionary, di: Dictionary, say: bool) -> void:
+	var r := vision(pl)
+	for t in objects:
+		if objects[t]["type"] == "shard" and _cheb(t, pl.pos) <= r + 3 and not ex.has(t):
+			ex[t] = true
+			di[t] = true
+			if say and not pl.get("seeker_told", {}).has(t):
+				var told: Dictionary = pl.get("seeker_told", {})
+				told[t] = true
+				pl["seeker_told"] = told
+				hud.toast("Чутьё на кристаллы: рядом сияет осколок!", Style.TEAL, 2.5)
 
 func _tint(base: Color, k: float, dark: bool) -> Color:
 	var c := base * k
@@ -1366,6 +1630,8 @@ func _event(p: Dictionary) -> void:
 						best = t
 			if best.x >= 0:
 				p.discovered[best] = true
+				if net and p.idx == viewer():
+					v_discovered[best] = true
 				var dir := _dir_name(best - p.pos)
 				await hud.alert("Шёпот духа", "Дух долины шепчет: осколок ждёт тебя %s, примерно в %d клетках. Он теперь отмечен для тебя." % [dir, bd], Color("c58cff"))
 			else:
@@ -1461,17 +1727,22 @@ func _cancel_trap_mode() -> void:
 	hud.set_phase("act")
 	_recalc()
 
-func _place_trap(t: Vector2i) -> void:
+func _place_trap(t: Vector2i, h: int) -> void:
 	var p: Dictionary = players[cur]
-	var card: int = p.hand[pending_card]
-	p.hand.remove_at(pending_card)
+	if h < 0 or h >= p.hand.size() or _cheb(t, p.pos) > 1 or steps_left < trap_cost(p.hand[h]):
+		return
+	var card: int = p.hand[h]
+	p.hand.remove_at(h)
 	steps_left -= trap_cost(card)
 	p.moved = true
 	var n := Models.trap_marker()
 	n.position = map.world_pos(t)
 	entities.add_child(n)
 	traps.append({"owner": cur, "pos": t, "card": card, "node": n})
-	hud.toast("Ловушка «%s» спрятана. Её видишь только ты." % DB.traps[card]["name"], Color("e0a0ff"), 3.0)
+	if not net or cur == my_seat:
+		hud.toast("Ловушка «%s» спрятана. Её видишь только ты." % DB.traps[card]["name"], Color("e0a0ff"), 3.0)
+	elif is_enemy(viewer(), cur):
+		n.visible = false
 	mode = "move"
 	hud.set_phase("act")
 	_recalc()
@@ -1581,7 +1852,7 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 	var info := "Сила: %d • Урон: %d" % [power, int(def["dmg"])]
 	if int(o["hits"]) > 1:
 		info += " • Нужно ударов: %d" % int(o["hits"])
-	var res: Dictionary = await hud.battle(p.name, def["name"], info, "Чтобы победить, нужно набрать %d или больше" % power, false, p.color, p.ability == "agile")
+	var res: Dictionary = await _ask(cur, "battle", func(): return await hud.battle(p.name, def["name"], info, "Чтобы победить, нужно набрать %d или больше" % power, false, p.color, p.ability == "agile"), "%s сражается с существом: %s…" % [p.name, def["name"]], DEFAULT_BATTLE, true)
 	var win: bool = int(res["total"]) >= power
 	var txt := ""
 	if win:
@@ -1623,9 +1894,9 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 	_face_node(q.node, p.node.position)
 	_begin_fight(p.node, q.node)
 	var forest: bool = map.get_t(q.pos) == MapGen.FOREST
-	var r: Dictionary = await hud.battle(p.name, q.name, "Потом %s сам бросит кубик" % q.name + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true, p.color, p.ability == "agile")
+	var r: Dictionary = await _ask(cur, "battle", func(): return await hud.battle(p.name, q.name, "Потом %s сам бросит кубик" % q.name + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true, p.color, p.ability == "agile"), "%s нападает на героя %s…" % [p.name, q.name], DEFAULT_BATTLE, true)
 	var a := int(r["total"])
-	var d: int = await hud.extra_roll(q.name, q.color, 1 if forest else 0)
+	var d: int = int(await _ask(q.idx, "extra", func(): return await hud.extra_roll(q.name, q.color, 1 if forest else 0), "%s защищается — бросает кубик…" % q.name, 1))
 	var res := "Ничья: %d против %d. Оба −1 HP" % [a, d]
 	if a > d:
 		res = "%s побеждает: %d против %d!" % [p.name, a, d]
@@ -1805,7 +2076,7 @@ func _respawn(p: Dictionary) -> void:
 				break
 		if cf.x < 0:
 			cf = map.shrine + Vector2i(0, -2)
-	var idx := players.find(p)
+	var idx: int = p.idx
 	if _player_at(cf, idx) >= 0:
 		for d in DIRS:
 			if map.passable(cf + d) and _player_at(cf + d, idx) < 0:
@@ -1885,10 +2156,12 @@ func start_summon_mode(hand_idx: int) -> void:
 	hud.set_phase("trap")
 	hud.toast("Нажми на зелёную клетку рядом, чтобы призвать: %s" % DB.summons[si]["name"], Style.GREEN, 3.0)
 
-func _place_summon(t: Vector2i) -> void:
+func _place_summon(t: Vector2i, h: int) -> void:
 	var p: Dictionary = players[cur]
-	var si: int = p.summons[pending_summon]
-	p.summons.remove_at(pending_summon)
+	if h < 0 or h >= p.summons.size() or _cheb(t, p.pos) > 1 or t == p.pos or steps_left < summon_cost(p.summons[h]):
+		return
+	var si: int = p.summons[h]
+	p.summons.remove_at(h)
 	steps_left -= summon_cost(si)
 	p.moved = true
 	_spawn_unit(cur, si, t)
@@ -2073,7 +2346,7 @@ func _fight_unit(p: Dictionary, u: Dictionary) -> void:
 	var n: Node3D = u["node"]
 	_begin_fight(p.node, n)
 	var owner: Dictionary = players[u["owner"]]
-	var res: Dictionary = await hud.battle(p.name, "%s (%s)" % [u["name"], owner.name], "Здоровье: %d • Сила 3" % u["hp"], "Чтобы ударить, нужно набрать 3 или больше", false, p.color, p.ability == "agile")
+	var res: Dictionary = await _ask(cur, "battle", func(): return await hud.battle(p.name, "%s (%s)" % [u["name"], owner.name], "Здоровье: %d • Сила 3" % u["hp"], "Чтобы ударить, нужно набрать 3 или больше", false, p.color, p.ability == "agile"), "%s бьёт призванного зверя…" % p.name, DEFAULT_BATTLE, true)
 	var win: bool = int(res["total"]) >= 3
 	var txt := ""
 	var dmg := int(round(2 * float(p.dmg_mult))) + 2 * int(p.wolves)
@@ -2112,7 +2385,10 @@ func _bonus_cards(p: Dictionary) -> void:
 	var cards: Array = []
 	for k in 5:
 		cards.append(_bonus_card(p))
-	var chosen: Array = await hud.bonus_pick(p.name, cards)
+	var chosen_raw: Array = await _ask(p.idx, "bonus", func(): return await hud.bonus_pick(p.name, cards), "%s открывает бонусные карты…" % p.name, [0, 1])
+	var chosen: Array = []
+	for ci0 in chosen_raw:
+		chosen.append(int(ci0))
 	var got: Array = []
 	for ci in chosen:
 		var c: Dictionary = cards[ci]
@@ -2135,9 +2411,24 @@ func _on_long_press(sp: Vector2) -> void:
 	var t := _pick(sp)
 	if not map.inb(t):
 		return
+	if net and (cur != my_seat or _echo_wait):
+		return
 	var o = objects.get(t)
 	var p: Dictionary = players[cur]
 	if o == null or o["type"] != "beast" or not _object_visible(o, p):
+		return
+	if net:
+		if absi(t.x - p.pos.x) + absi(t.y - p.pos.y) != 1:
+			hud.toast("Подойди к зверю вплотную, чтобы приручить или атаковать.", Style.GOLD, 2.5)
+			return
+		_cmd({"k": "press", "t": [t.x, t.y]})
+		return
+	await _long_press_tile(t)
+
+func _long_press_tile(t: Vector2i) -> void:
+	var o = objects.get(t)
+	var p: Dictionary = players[cur]
+	if o == null or o["type"] != "beast":
 		return
 	var d: Vector2i = t - p.pos
 	var def: Dictionary = DB.beasts[o["kind"]]
@@ -2162,7 +2453,7 @@ func _on_long_press(sp: Vector2) -> void:
 				can_tame = p.items.count("honey") >= 1
 	opts.append([tame_txt, can_tame])
 	busy = true
-	var choice: int = await hud.choice(def["name"], opts)
+	var choice: int = int(await _ask(cur, "choice", func(): return await hud.choice(def["name"], opts), "%s решает, что делать со зверем…" % p.name, -1))
 	busy = false
 	if choice == 0:
 		steps_left -= cost

@@ -8,6 +8,7 @@ const Models = preload("res://scripts/world/models.gd")
 const Papyrus = preload("res://scripts/ui/papyrus.gd")
 const SettingsPanel = preload("res://scripts/ui/settings_panel.gd")
 const CardEditor = preload("res://scripts/menu/card_editor.gd")
+const NetLobby = preload("res://scripts/menu/net_lobby.gd")
 
 const SIZES := [
 	["Малая", Vector2i(18, 38), "≈10 мин"],
@@ -38,6 +39,7 @@ var code_edit: LineEdit
 var papyrus
 var settings_panel
 var card_editor
+var net_lobby
 
 func _ready() -> void:
 	theme = Style.theme
@@ -65,6 +67,9 @@ func _ready() -> void:
 	add_child(settings_panel)
 	card_editor = CardEditor.new()
 	add_child(card_editor)
+	net_lobby = NetLobby.new()
+	net_lobby.start_requested.connect(func(c): start_requested.emit(c))
+	add_child(net_lobby)
 	_refresh()
 
 func _build() -> void:
@@ -263,6 +268,9 @@ void fragment() {
 	var eb := Style.button("Редактор карт", 19)
 	eb.pressed.connect(func(): card_editor.open())
 	bh.add_child(eb)
+	var nb := Style.button("По сети", 19)
+	nb.pressed.connect(func(): net_lobby.open())
+	bh.add_child(nb)
 	var sbn := Style.button("Настройки", 19)
 	sbn.pressed.connect(func(): settings_panel.open())
 	bh.add_child(sbn)

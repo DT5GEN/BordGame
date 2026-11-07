@@ -88,6 +88,10 @@ func _ready() -> void:
 		get_tree().quit()
 	elif "--introtest" in OS.get_cmdline_user_args():
 		_introtest.call_deferred()
+	elif "--nettest" in OS.get_cmdline_user_args():
+		_nettest.call_deferred()
+	elif "--lobbytest" in OS.get_cmdline_user_args():
+		_lobbytest.call_deferred()
 	else:
 		show_intro()
 
@@ -116,6 +120,9 @@ func start_game(cfg: Dictionary) -> void:
 	_switch(g)
 
 func _restart() -> void:
+	if current != null and current.get("net") == true:
+		show_menu()
+		return
 	var cfg: Dictionary = DB.last_config.duplicate(true)
 	cfg["show_rules"] = false
 	for p in cfg["players"]:
@@ -390,7 +397,7 @@ func _simtest() -> void:
 				if not p.summons.is_empty() and g.steps_left >= g.summon_cost(p.summons[0]) and randf() < 0.5:
 					g.start_summon_mode(0)
 					if g.mode == "summon" and not g.summon_targets.is_empty():
-						g._place_summon(g.summon_targets.keys()[0])
+						g._place_summon(g.summon_targets.keys()[0], g.pending_summon)
 					elif g.mode == "summon":
 						g._cancel_trap_mode()
 				if g.can_reroll() and randf() < 0.3:
@@ -398,7 +405,7 @@ func _simtest() -> void:
 				if not p.hand.is_empty() and g.steps_left >= 4 and randf() < 0.4:
 					g.start_trap_mode(0)
 					if g.mode == "trap" and not g.trap_targets.is_empty():
-						g._place_trap(g.trap_targets.keys()[0])
+						g._place_trap(g.trap_targets.keys()[0], g.pending_card)
 					elif g.mode == "trap":
 						g._cancel_trap_mode()
 				if p.items.has("potion") and p.hp < 10:
@@ -560,3 +567,185 @@ func _collect_buttons(n: Node, txt: String, out: Array) -> void:
 		if c is Button and c.text == txt:
 			out.append(c)
 		_collect_buttons(c, txt, out)
+
+
+# ------------------------------------------------------------ проверка сети: два клиента на одном сервере
+func _nettest() -> void:
+	var args := OS.get_cmdline_user_args()
+	DB.set_meta("fast", not "--real" in args)
+	var role := "host" if "--host" in args else "guest"
+	var port := "7777"
+	var limit := 120
+	var kill_at := 0
+	var tag := ""
+	for a in args:
+		if a.begins_with("--port="):
+			port = a.substr(7)
+		if a.begins_with("--secs="):
+			limit = int(a.substr(7))
+		if a.begins_with("--kill-at="):
+			kill_at = int(a.substr(10))
+		if a.begins_with("--tag="):
+			tag = a.substr(6)
+	var url := "ws://127.0.0.1:" + port
+	var code_file := "/tmp/nettest_code_" + port
+	var log_path := "/tmp/nettest_%s%s_%s.log" % [role, tag, port]
+	var logf := FileAccess.open(log_path, FileAccess.WRITE)
+	var lobby_ok := [false]
+	Net.error.connect(func(t): print("NETERR ", t))
+	Net.lobby.connect(func(d):
+		print("LOBBY ", d["room"], " players=", d["players"].size())
+		if role == "host" and d["players"].size() >= 2 and not lobby_ok[0]:
+			lobby_ok[0] = true
+			Net.start_game())
+	Net.started.connect(func(d):
+		var list: Array = []
+		var my := -1
+		for i in d["seats"].size():
+			var sd: Dictionary = d["seats"][i]
+			if int(sd["cid"]) == Net.cid:
+				my = i
+			list.append({"name": sd["name"], "hero": int(sd["hero"]), "pet": false, "slot": i, "team": 0, "ability": int(sd["ability"]), "cid": int(sd["cid"])})
+		var cfg := {"players": list, "size": Vector2i(18, 38), "show_rules": false, "team_mode": false, "die": "D6", "seed": int(d["seed"]), "net": true, "my_seat": my}
+		cfg["replay"] = bool(d.get("replay", false))
+		print("START seat=", my, " seed=", d["seed"], " replay=", cfg["replay"])
+		start_game(cfg)
+		if "--beast" in args:
+			_force_beasts(current)
+		var g = current
+		g.cmd_done.connect(func(seq):
+			logf.store_line("SYNC %d %s" % [seq, g.state_digest()])
+			logf.flush()))
+	if "--rejoin" in args:
+		Net.rejoin()
+	elif role == "host":
+		Net.create_room(url, {"name": "Хост", "hero": 0, "ability": 0}, {"size_idx": 0, "die": "D6", "team_mode": false, "balance": {}})
+		while Net.room == "":
+			await get_tree().process_frame
+		var cf := FileAccess.open(code_file, FileAccess.WRITE)
+		cf.store_string(Net.room)
+		cf.close()
+	else:
+		var t0 := Time.get_ticks_msec()
+		while not FileAccess.file_exists(code_file) and Time.get_ticks_msec() - t0 < 20000:
+			await get_tree().create_timer(0.2).timeout
+		await get_tree().create_timer(0.5).timeout
+		var code := FileAccess.get_file_as_string(code_file).strip_edges()
+		Net.join_room(url, code, {"name": "Гость", "hero": 3, "ability": 2})
+	var t_start := Time.get_ticks_msec()
+	var rnd := RandomNumberGenerator.new()
+	rnd.randomize()
+	while Time.get_ticks_msec() - t_start < limit * 1000:
+		await get_tree().create_timer(0.15).timeout
+		if kill_at > 0 and Time.get_ticks_msec() - t_start > kill_at * 1000:
+			print("KILL")
+			OS.kill(OS.get_process_id())
+		var g = current
+		if g == null or not g.get("net") or g.get("hud") == null or g.game_over:
+			if g != null and g.get("game_over") == true:
+				break
+			continue
+		if "--real" in args:
+			_real_ui_bot(g)
+		if g.cur != g.my_seat or g._echo_wait or g._flow or not g._q.is_empty() or g.busy:
+			continue
+		if g.hud.phase == "roll":
+			g.hud.roll_requested.emit("D6")
+		elif g.hud.phase == "trap":
+			if g.mode == "trap" and not g.trap_targets.is_empty():
+				var tt: Vector2i = g.trap_targets.keys()[0]
+				g._cmd({"k": "trap", "h": g.pending_card, "t": [tt.x, tt.y]})
+			elif g.mode == "summon" and not g.summon_targets.is_empty():
+				var st: Vector2i = g.summon_targets.keys()[0]
+				g._cmd({"k": "summon", "h": g.pending_summon, "t": [st.x, st.y]})
+			else:
+				g._cancel_trap_mode()
+		elif g.hud.phase == "act":
+			var best := Vector2i(-1, -1)
+			var p: Dictionary = g.players[g.cur]
+			var roll_dice := rnd.randf()
+			if g.rolled and g.steps_left >= 3 and roll_dice < 0.3 and not p.hand.is_empty() and not p.now_block_traps:
+				g.start_trap_mode(0)
+				continue
+			if g.rolled and g.steps_left >= 4 and roll_dice > 0.8 and not p.summons.is_empty() and not p.now_block_summon:
+				g.start_summon_mode(0)
+				continue
+			for t in g.reach:
+				if best.x < 0 or t.y > best.y:
+					best = t
+			if g.rolled and best.x >= 0 and best.y > p.pos.y and g.steps_left > 0:
+				if "--beast" in args:
+					for bt in g.targets:
+						if g.objects.has(bt) and g.objects[bt]["type"] == "beast" and g.reach.has(bt):
+							best = bt
+				g._cmd({"k": "walk", "t": [best.x, best.y]})
+			else:
+				g.hud.end_turn_requested.emit()
+	print("NETTEST DONE role=", role, " turns=", current.get("round_no"))
+	logf.close()
+	get_tree().quit()
+
+
+func _lobbytest() -> void:
+	show_menu()
+	await _wait(1.5)
+	await _shot("net_menu")
+	var lb = current.net_lobby
+	lb.open()
+	lb.server_edit.text = "127.0.0.1:7793"
+	lb.name_edit.text = "Саша"
+	await _wait(0.5)
+	await _shot("net_enter")
+	lb._create()
+	await _wait(3.5)
+	await _shot("net_room")
+	get_tree().quit()
+
+
+## Проверка живого интерфейса: «нажимает» окна и кнопки, как это делал бы игрок.
+func _real_ui_bot(g) -> void:
+	var h = g.hud
+	if h.current_qte != null and is_instance_valid(h.current_qte) and h.current_qte.started and not h.current_qte.finished:
+		h.current_qte.press()
+	var rb := _find_button(h.alert_panel, "Бросить кубик!")
+	if rb != null and h.alert_panel.visible and not rb.disabled:
+		rb.pressed.emit()
+	var rb2 := _find_button_prefix(h.alert_panel, "Бросить кубик (")
+	if rb2 != null and h.alert_panel.visible and not rb2.disabled:
+		rb2.pressed.emit()
+	if h.alert_panel.visible and h.alert_closable and g.cur == g.my_seat and not g.replaying:
+		h._alert_closed.emit()
+	var cards: Array = []
+	_collect_buttons(h.alert_panel, "?", cards)
+	if cards.size() >= 5 and h.alert_panel.visible:
+		for i in 2:
+			cards[i].pressed.emit()
+	var take := _find_button(h.alert_panel, "Забрать карты")
+	if take != null and take.visible and h.alert_panel.visible:
+		take.pressed.emit()
+
+func _find_button_prefix(n: Node, pre: String) -> Button:
+	for c in n.get_children():
+		if c is Button and c.text.begins_with(pre):
+			return c
+		var r = _find_button_prefix(c, pre)
+		if r:
+			return r
+	return null
+
+## Проверка боя по сети: ставим зверей прямо перед героями (одинаково у всех клиентов).
+func _force_beasts(g) -> void:
+	var beasts: Array = []
+	for t in g.objects:
+		if g.objects[t]["type"] == "beast" and g.objects[t]["kind"] not in ["wolf", "bear"]:
+			beasts.append(t)
+	for i in mini(2, g.players.size()):
+		if i >= beasts.size():
+			break
+		var old: Vector2i = beasts[i]
+		var o: Dictionary = g.objects[old]
+		var np: Vector2i = g.players[i].pos + Vector2i(0, 1)
+		g.objects.erase(old)
+		o["pos"] = np
+		(o["node"] as Node3D).position = g.map.world_pos(np)
+		g.objects[np] = o

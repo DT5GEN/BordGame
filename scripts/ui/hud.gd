@@ -15,6 +15,7 @@ signal settings_requested
 signal view_toggle_requested
 signal summon_chosen(idx: int)
 signal reroll_requested
+signal skip_requested
 signal _alert_closed
 signal battle_event(kind: String)
 
@@ -58,6 +59,13 @@ var sub_lbl: Label
 var summon_btn: Button
 var reroll_btn: Button
 var ability_lbl: Label
+var alert_serial := 0
+var _waiting := false
+var offline_bar: PanelContainer = null
+var offline_lbl: Label = null
+
+func _passive() -> bool:
+	return game != null and game.net and game.is_passive()
 
 func _ready() -> void:
 	layer = 5
@@ -268,6 +276,8 @@ func _select_die(d: String) -> void:
 		dice_btns[k].button_pressed = k == d
 
 func set_phase(ph: String) -> void:
+	if game != null and game.net and game.cur != game.my_seat and ph in ["roll", "act", "trap"]:
+		ph = "other"
 	phase = ph
 	roll_box.visible = ph == "roll"
 	act_box.visible = ph == "act"
@@ -279,7 +289,7 @@ func set_phase(ph: String) -> void:
 func refresh() -> void:
 	if game == null or game.players.is_empty():
 		return
-	var p: Dictionary = game.current()
+	var p: Dictionary = game.players[game.viewer()]
 	name_lbl.text = p.name
 	dot.add_theme_stylebox_override("panel", Style.sb(p.color, Color.WHITE, 2, 8, 0))
 	hp_bar.max_value = p.max_hp
@@ -318,6 +328,8 @@ func refresh() -> void:
 	status_lbl.visible = not st.is_empty()
 	var w: String = game.weather
 	time_lbl.text = "Раунд %d  •  %s  %s  •  %s" % [game.round_no, game.clock_text(), game.time_name(), w]
+	if game.net and game.cur != game.my_seat:
+		time_lbl.text += "  •  Ходит: " + game.players[game.cur].name
 	steps_lbl.text = "Шагов: %d" % game.steps_left
 	view_btn.text = "Вид: 1-е лицо" if game.view_first else "Вид: 3-е лицо"
 	trap_btn.text = "Ловушки (%d)" % p.hand.size()
@@ -460,9 +472,96 @@ func alert(title: String, text: String, col: Color = Style.GOLD) -> void:
 	alert_closable = true
 	var tw := create_tween()
 	tw.tween_property(alert_panel, "modulate:a", 1.0, 0.2)
+	if _passive():
+		_auto_close(0.1 if game.replaying else 3.2)
 	await _alert_closed
 	alert_panel.visible = false
 	_hide_modal()
+
+
+## Закрыть окно само через паузу (у тех, кто сейчас не ходит).
+func _auto_close(delay: float) -> void:
+	alert_serial += 1
+	var my_id := alert_serial
+	get_tree().create_timer(delay).timeout.connect(func():
+		if alert_serial == my_id and alert_panel.visible:
+			_alert_closed.emit())
+
+## Окно боя: если его нет (смотрим чужой бой), заводим новое.
+func _battle_box() -> VBoxContainer:
+	if not alert_panel.visible or alert_panel.get_child_count() == 0 or _waiting:
+		_waiting = false
+		for c in alert_panel.get_children():
+			c.free()
+		alert_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS, Color(Style.RED, 0.7), 2, 16, 12))
+		var nv := VBoxContainer.new()
+		nv.add_theme_constant_override("separation", 2)
+		alert_panel.add_child(nv)
+		alert_panel.visible = true
+		alert_panel.modulate.a = 1.0
+		_show_modal(0.0)
+	return alert_panel.get_child(0)
+
+## Ждём чужого решения (бой, выбор карт…).
+func show_wait(text: String) -> void:
+	if fast:
+		return
+	for c in alert_panel.get_children():
+		c.free()
+	alert_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, Color(Style.GOLD, 0.6), 2, 16, 14))
+	var v := VBoxContainer.new()
+	alert_panel.add_child(v)
+	v.add_child(_wrap_label(text, 24, Style.PARCH, 460, Style.font_bold))
+	alert_panel.visible = true
+	alert_panel.modulate.a = 1.0
+	_waiting = true
+	_show_modal(0.0)
+	await _place_center(alert_panel, 500, 10)
+
+func hide_wait() -> void:
+	if _waiting:
+		_waiting = false
+		alert_panel.visible = false
+		for c in alert_panel.get_children():
+			c.queue_free()
+		_hide_modal()
+
+## Остальные игроки видят бой по итогам: удар, блок, ответный бросок.
+func replay_battle(res: Dictionary) -> void:
+	if fast:
+		return
+	var k := 0.12 if game.replaying else 1.0
+	battle_event.emit("enemy_attack")
+	await get_tree().create_timer(1.3 * k).timeout
+	battle_event.emit("block" if bool(res.get("blocked", false)) else "hit")
+	await get_tree().create_timer(0.9 * k).timeout
+	battle_event.emit("hero_attack")
+	await get_tree().create_timer(0.7 * k).timeout
+
+## Ходящий игрок отключился: остальным предлагаем подождать или пропустить его ход.
+func set_offline(seat: int) -> void:
+	if offline_bar == null:
+		offline_bar = PanelContainer.new()
+		offline_bar.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, Style.RED, 2, 14, 10))
+		offline_bar.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		offline_bar.position = Vector2(-260, 64)
+		offline_bar.custom_minimum_size = Vector2(520, 0)
+		root.add_child(offline_bar)
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 12)
+		offline_bar.add_child(h)
+		offline_lbl = Style.label("", 20, Style.PARCH, Style.font_bold)
+		offline_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		offline_lbl.custom_minimum_size.x = 300
+		h.add_child(offline_lbl)
+		var sb := Style.button("Пропустить ход", 18)
+		sb.pressed.connect(func(): skip_requested.emit())
+		h.add_child(sb)
+	if seat < 0:
+		offline_bar.visible = false
+		return
+	offline_lbl.text = "%s отключился(ась). Подождём, пока вернётся, или пропустим ход." % game.players[seat].name
+	offline_bar.visible = true
 
 # ------------------------------------------------------------ интерактивный бой
 const BW := 520.0
@@ -621,8 +720,8 @@ func extra_roll(who: String, col: Color, bonus: int) -> int:
 	if fast:
 		await get_tree().process_frame
 		return randi_range(1, 6) + bonus
-	var v: VBoxContainer = alert_panel.get_child(0)
-	v.add_child(_wrap_label("Теперь защищается %s — передай телефон!" % who, 19, col.lightened(0.3), BW, Style.font_bold))
+	var v: VBoxContainer = _battle_box()
+	v.add_child(_wrap_label(("Теперь защищается %s — передай телефон!" % who) if not (game != null and game.net) else "Теперь защищается %s — бросай кубик!" % who, 19, col.lightened(0.3), BW, Style.font_bold))
 	var num := Style.outlined(Style.label("?", 52, col.lightened(0.3), Style.font_title), 6)
 	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(num)
@@ -702,7 +801,7 @@ func battle_finish(result: String, win: bool) -> void:
 		print("BATTLE: ", result)
 		await get_tree().process_frame
 		return
-	var v: VBoxContainer = alert_panel.get_child(0)
+	var v: VBoxContainer = _battle_box()
 	v.add_child(_wrap_label(result, 20, Style.GREEN if win else Color("ff7a6a"), BW, Style.font_bold))
 	var b := Style.button("Дальше", 22, 180)
 	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -710,6 +809,8 @@ func battle_finish(result: String, win: bool) -> void:
 	v.add_child(b)
 	await _place_center(alert_panel, BW + 30, 10)
 	alert_closable = true
+	if _passive():
+		_auto_close(0.1 if game.replaying else 3.0)
 	await _alert_closed
 	alert_panel.visible = false
 	_hide_modal()

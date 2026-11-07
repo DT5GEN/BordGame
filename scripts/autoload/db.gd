@@ -216,6 +216,37 @@ func _apply_overrides() -> void:
 	var d = JSON.parse_string(FileAccess.get_file_as_string(OVERRIDE_PATH))
 	if typeof(d) != TYPE_DICTIONARY:
 		return
+	apply_balance(d)
+
+## Сетевая игра: у всех должен быть баланс хозяина комнаты (без записи на диск).
+func balance_dict() -> Dictionary:
+	var ot := {}
+	for i in traps.size():
+		var c: Dictionary = traps[i]
+		var b: Dictionary = base_traps[i]
+		if c["name"] != b["name"] or c["fx"] != b["fx"]:
+			ot[str(i)] = {"name": c["name"], "fx": c["fx"]}
+	var ob := {}
+	for kind in beasts:
+		var diff := {}
+		for bk in BEAST_LIMITS:
+			if int(beasts[kind][bk]) != int(base_beasts[kind][bk]):
+				diff[bk] = int(beasts[kind][bk])
+		if not diff.is_empty():
+			ob[kind] = diff
+	return {"traps": ot, "beasts": ob}
+
+func use_balance(d: Dictionary) -> void:
+	traps = base_traps.duplicate(true)
+	beasts = base_beasts.duplicate(true)
+	apply_balance(d)
+
+func restore_own_balance() -> void:
+	traps = base_traps.duplicate(true)
+	beasts = base_beasts.duplicate(true)
+	_apply_overrides()
+
+func apply_balance(d: Dictionary) -> void:
 	var ot: Dictionary = d.get("traps", {})
 	for k in ot:
 		var i := int(k)
