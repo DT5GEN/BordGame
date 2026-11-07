@@ -9,6 +9,8 @@ var current: Node
 func _ready() -> void:
 	if "--autotest" in OS.get_cmdline_user_args():
 		_autotest.call_deferred()
+	elif "--bench" in OS.get_cmdline_user_args():
+		_bench.call_deferred()
 	elif "--simtest" in OS.get_cmdline_user_args():
 		_simtest.call_deferred()
 	else:
@@ -100,6 +102,10 @@ func _autotest() -> void:
 	await _wait(0.8)
 	await _shot("06c_settings")
 	g.settings_panel.close()
+	g.hud._confirm_menu()
+	await _wait(0.6)
+	await _shot("06d_confirm")
+	g.hud.confirm_bar.queue_free()
 	Settings.music_folder = ""
 	Settings.save()
 	g.papyrus.open()
@@ -176,7 +182,7 @@ func _autotest() -> void:
 	# интерактивный бой с волком
 	var wolf_t = null
 	for t in g.objects:
-		if g.objects[t]["type"] == "beast" and g.objects[t]["kind"] == "wolf":
+		if g.objects[t]["type"] == "beast" and g.objects[t]["kind"] == "boar":
 			wolf_t = t
 			break
 	var hero = g.players[0]
@@ -318,3 +324,25 @@ func _find_button(n: Node, txt: String) -> Button:
 		if r:
 			return r
 	return null
+
+func _bench() -> void:
+	Engine.max_fps = 0
+	var cfg := {"players": [{"name": "А", "hero": 0, "pet": false, "slot": 0}, {"name": "Б", "hero": 1, "pet": false, "slot": 1}], "size": Vector2i(24, 50), "show_rules": false, "seed": 7}
+	start_game(cfg)
+	var g = current
+	await _wait(1.0)
+	g.hud.overlay_pass.visible = false
+	g._turn_start_effects()
+	for zoom in [8.5, 20.0]:
+		g.cam_dist = zoom
+		await _wait(3.0)
+		var t0 := Time.get_ticks_usec()
+		var f0 := Engine.get_process_frames()
+		await _wait(4.0)
+		var frames := Engine.get_process_frames() - f0
+		var dt := (Time.get_ticks_usec() - t0) / 1000000.0
+		print("BENCH zoom=%.1f fps=%.1f draw_calls=%d objects=%d prims=%d" % [zoom, frames / dt,
+			RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
+			RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_OBJECTS_IN_FRAME),
+			RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)])
+	get_tree().quit()

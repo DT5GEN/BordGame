@@ -74,6 +74,15 @@ func _ready() -> void:
 		Settings.shuffle = on
 		Settings.save())
 	v.add_child(sh)
+	var eco := CheckBox.new()
+	eco.text = "Экономия заряда и нагрева (30 кадров в секунду)"
+	eco.button_pressed = Settings.eco
+	eco.add_theme_font_size_override("font_size", 19)
+	eco.toggled.connect(func(on):
+		Settings.eco = on
+		Settings.apply_video()
+		Settings.save())
+	v.add_child(eco)
 	v.add_child(Style.label("Папка с музыкой (mp3, ogg, wav):", 20, Style.PARCH, Style.font_bold))
 	var fh := HBoxContainer.new()
 	v.add_child(fh)

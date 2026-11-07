@@ -5,6 +5,7 @@ const M = preload("res://scripts/world/map_gen.gd")
 const Models = preload("res://scripts/world/models.gd")
 
 const BOTTOM := -1.4
+const CHUNK := 8
 
 static func tile_color(tt: int, x: int, z: int, rng: RandomNumberGenerator) -> Color:
 	var c: Color
@@ -37,6 +38,8 @@ static func build(map, parent: Node3D) -> Dictionary:
 			if tt == M.BRIDGE:
 				key = M.WATER
 				topy = -0.6
+			# куски 8×8 клеток — камера рисует только то, что видно
+			key = key * 100000 + (z / CHUNK) * 1000 + (x / CHUNK)
 			if not groups.has(key):
 				groups[key] = []
 			groups[key].append([p, tile_color(tt, x, z, rng), topy])
@@ -93,6 +96,20 @@ static func build(map, parent: Node3D) -> Dictionary:
 static func _mm(mesh: Mesh, items: Array, mat: Material, parent: Node3D, shadows := true, info: Dictionary = {}) -> void:
 	if items.is_empty():
 		return
+	# делим на куски по клеткам, чтобы невидимое не рисовалось
+	var chunks := {}
+	for it in items:
+		var key := 0
+		if it.size() > 2:
+			var tp: Vector2i = it[2]
+			key = (tp.y / CHUNK) * 1000 + (tp.x / CHUNK)
+		if not chunks.has(key):
+			chunks[key] = []
+		chunks[key].append(it)
+	for key in chunks:
+		_mm_one(mesh, chunks[key], mat, parent, shadows, info)
+
+static func _mm_one(mesh: Mesh, items: Array, mat: Material, parent: Node3D, shadows: bool, info: Dictionary) -> void:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true

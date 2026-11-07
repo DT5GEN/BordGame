@@ -6,6 +6,8 @@ const PARCH := Color("f3e3bf")
 const INK := Color("3b2a1a")
 const WOOD := Color(0.14, 0.09, 0.06, 0.9)
 const WOOD_LIGHT := Color("6b4a2c")
+const GLASS := Color(0.08, 0.055, 0.035, 0.62)
+const GLASS_DARK := Color(0.08, 0.055, 0.035, 0.84)
 const RED := Color("e05a4f")
 const GREEN := Color("6fd07a")
 const TEAL := Color("7fe3ff")
@@ -67,7 +69,7 @@ func _make_theme() -> Theme:
 	t.set_color("font_disabled_color", "Button", Color(0.7, 0.66, 0.6, 0.6))
 	t.set_font("font", "Button", font_bold)
 	# Панели
-	t.set_stylebox("panel", "PanelContainer", sb(WOOD))
+	t.set_stylebox("panel", "PanelContainer", sb(GLASS))
 	t.set_stylebox("panel", "Panel", sb(WOOD))
 	# Поля ввода
 	var le := sb(Color(0.08, 0.05, 0.03, 0.9), Color(GOLD, 0.5), 2, 10, 8)

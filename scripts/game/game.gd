@@ -56,6 +56,7 @@ var darkness: MeshInstance3D
 var rain: CPUParticles3D
 var hl_mm: MultiMesh
 var fog_mm: MultiMesh
+var haze_mm: MultiMesh
 var view_first := false
 var fp_yaw := 0.0
 var fp_pitch := -0.35
@@ -149,7 +150,8 @@ func _setup_env() -> void:
 	add_child(we)
 	sun = DirectionalLight3D.new()
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 35.0
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_max_distance = 26.0
 	sun.shadow_bias = 0.04
 	add_child(sun)
 
@@ -179,7 +181,6 @@ func _spawn_objects() -> void:
 					var sh := Models.shard()
 					sh.scale = Vector3.ONE * 0.6
 					sh.position = Vector3(0.3, 0, 0.25)
-					sh.get_child(sh.get_child_count() - 1).set("light_energy", 0.8)
 					n.add_child(sh)
 			"event":
 				n = Models.event_stone()
@@ -215,6 +216,8 @@ func _setup_players() -> void:
 		lantern.light_color = Color("ffc070")
 		lantern.omni_range = 3.2
 		lantern.light_energy = 0.0
+		lantern.visible = false
+		lantern.shadow_enabled = false
 		lantern.position = Vector3(0, 1.0, 0.2)
 		node.add_child(lantern)
 		var tag := Label3D.new()
@@ -287,7 +290,7 @@ func _setup_darkness_and_rain() -> void:
 	darkness.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(darkness)
 	rain = CPUParticles3D.new()
-	rain.amount = 700
+	rain.amount = 400
 	rain.lifetime = 0.8
 	rain.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
 	rain.emission_box_extents = Vector3(14, 0.5, 14)
@@ -663,10 +666,27 @@ func _set_time_visual(hv: float) -> void:
 		(info["water_mat"] as ShaderMaterial).set_shader_parameter("darkness", nt)
 	for p in players:
 		p.lantern.light_energy = nt * 1.6
+	_update_lights()
 	for o in objects.values():
 		if o["type"] == "campfire":
 			var l: OmniLight3D = o["node"].get_node("Light")
 			l.set_meta("base", 1.4 + nt * 1.6)
+
+## Источники света дороги для старого рендерера: включаем только те, что рядом с текущим героем.
+func _update_lights() -> void:
+	if players.is_empty():
+		return
+	var p: Dictionary = players[cur]
+	var nt := clampf((_time_shown - 18.0) / 3.0, 0.0, 1.0)
+	for i in players.size():
+		var q: Dictionary = players[i]
+		q.lantern.visible = nt > 0.05 and i == cur
+	for o in objects.values():
+		if o["type"] == "campfire":
+			var l: OmniLight3D = o["node"].get_node("Light")
+			var pos: Vector2i = o["pos"]
+			var d: int = maxi(absi(pos.x - p.pos.x), absi(pos.y - p.pos.y))
+			l.visible = d <= 9 and p.explored.has(pos)
 
 func _update_darkness() -> void:
 	if dark_row < 0:
@@ -755,6 +775,7 @@ func refresh_view() -> void:
 		q.node.get_node("Ring").visible = i == cur
 	for tr in traps:
 		tr["node"].visible = tr["owner"] == cur
+	_update_lights()
 
 func _tint(base: Color, k: float, dark: bool) -> Color:
 	var c := base * k
@@ -767,29 +788,47 @@ const FOG_HAZE := Color(0.06, 0.07, 0.1, 0.62)
 const FOG_DARK := Color(0.02, 0.025, 0.04, 1.0)
 
 func _setup_fog() -> void:
-	fog_mm = MultiMesh.new()
-	fog_mm.transform_format = MultiMesh.TRANSFORM_3D
-	fog_mm.use_colors = true
+	# тьма — непрозрачная (дёшево), дымка — полупрозрачная (только узкое кольцо у края обзора)
+	fog_mm = _fog_layer(false)
+	haze_mm = _fog_layer(true)
+
+func _fog_layer(transparent: bool) -> MultiMesh:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
 	var bm := BoxMesh.new()
 	bm.size = Vector3(1.0, 3.4, 1.0)
-	fog_mm.mesh = bm
+	mm.mesh = bm
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	if transparent:
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.vertex_color_use_as_albedo = true
 	mat.disable_fog = true
 	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = fog_mm
+	mmi.multimesh = mm
 	mmi.material_override = mat
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mmi)
+	return mm
 
 func _set_fog(items: Array) -> void:
-	fog_mm.instance_count = items.size()
-	for i in items.size():
-		var t: Vector2i = items[i][0]
-		fog_mm.set_instance_transform(i, Transform3D(Basis(), Vector3(t.x, 1.0, t.y)))
-		fog_mm.set_instance_color(i, items[i][1])
+	var dark: Array = []
+	var haze: Array = []
+	for it in items:
+		if it[1] == FOG_DARK:
+			dark.append(it[0])
+		else:
+			haze.append(it[0])
+	_fill_fog(fog_mm, dark, FOG_DARK)
+	_fill_fog(haze_mm, haze, FOG_HAZE)
+
+func _fill_fog(mm: MultiMesh, tiles: Array, col: Color) -> void:
+	mm.instance_count = tiles.size()
+	for i in tiles.size():
+		var t: Vector2i = tiles[i]
+		mm.set_instance_transform(i, Transform3D(Basis(), Vector3(t.x, 1.0, t.y)))
+		mm.set_instance_color(i, col)
 
 func _update_shrine_sockets() -> void:
 	var p: Dictionary = players[cur]
@@ -1263,7 +1302,7 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 	var info := "Сила: %d • Урон: %d" % [power, int(def["dmg"])]
 	if int(o["hits"]) > 1:
 		info += " • Нужно ударов: %d" % int(o["hits"])
-	var res: Dictionary = await hud.battle(p.name, def["name"], info, "Чтобы победить, нужно набрать %d или больше" % power, false)
+	var res: Dictionary = await hud.battle(p.name, def["name"], info, "Чтобы победить, нужно набрать %d или больше" % power, false, p.color)
 	var win: bool = int(res["total"]) >= power
 	var txt := ""
 	if win:
@@ -1302,7 +1341,7 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 	_face_node(q.node, p.node.position)
 	_begin_fight(p.node, q.node)
 	var forest: bool = map.get_t(q.pos) == MapGen.FOREST
-	var r: Dictionary = await hud.battle(p.name, q.name, "Соперник бросит кубик сам" + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true)
+	var r: Dictionary = await hud.battle(p.name, q.name, "Соперник бросит кубик сам" + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true, p.color)
 	var a := int(r["total"])
 	var d := rng.randi_range(1, 6) + (1 if forest else 0)
 	var res := "Ничья: %d против %d. Оба −1 HP" % [a, d]
@@ -1348,6 +1387,7 @@ func _face_node(n: Node3D, target: Vector3) -> void:
 var _fight_a: Node3D
 var _fight_b: Node3D
 var _fight_cam := 8.5
+var _fight_yaw := 0.0
 
 func _begin_fight(a: Node3D, b: Node3D) -> void:
 	_fight_a = a
@@ -1357,13 +1397,27 @@ func _begin_fight(a: Node3D, b: Node3D) -> void:
 	a.visible = true
 	a.set("posing", true)
 	follow = null
-	var fwd := -cam.global_basis.z
-	fwd.y = 0
-	cam_goal = (a.position + b.position) * 0.5 - fwd.normalized() * 1.6
-	cam_dist = 5.0
+	# камера сбоку под углом к линии боя, чтобы видно было обоих
+	var d := b.position - a.position
+	var line := Vector2(d.x, d.z).normalized()
+	if line == Vector2.ZERO:
+		line = Vector2(0, 1)
+	var f := line.rotated(deg_to_rad(65.0))
+	_fight_yaw = cam_yaw
+	var target_yaw := atan2(-f.x, f.y)
+	while target_yaw - cam_yaw > PI:
+		target_yaw -= TAU
+	while target_yaw - cam_yaw < -PI:
+		target_yaw += TAU
+	var tw := create_tween()
+	tw.tween_property(self, "cam_yaw", target_yaw, 0.5)
+	cam_goal = (a.position + b.position) * 0.5 - Vector3(f.x, 0, f.y) * 1.3
+	cam_dist = 4.8
 
 func _end_fight() -> void:
 	cam_dist = _fight_cam
+	var tw := create_tween()
+	tw.tween_property(self, "cam_yaw", _fight_yaw, 0.5)
 	if _fight_a:
 		_fight_a.set("posing", false)
 		var al: Node3D = _fight_a.get_node_or_null("Body/ArmL")

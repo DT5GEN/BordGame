@@ -8,6 +8,7 @@ config/description="Прототип пошаговой 3D-ходилки по �
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 boot_splash/bg_color=Color(0.07, 0.05, 0.04, 1)
+run/max_fps=60
 config/icon="res://icon.svg"
 
 [autoload]
@@ -34,4 +35,5 @@ pointing/emulate_mouse_from_touch=true
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 anti_aliasing/quality/msaa_3d=2
+lights_and_shadows/directional_shadow/size=2048
 textures/vram_compression/import_etc2_astc=true

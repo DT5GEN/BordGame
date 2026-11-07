@@ -243,7 +243,10 @@ static func beast(kind: String) -> Node3D:
 			add(root, box(Vector3(0.18, 0.17, 0.17)), b, Vector3(0, 0.3, 0.3))
 			add(root, cyl(0.06, 0.06, 0.06, 8), Color("d39a8a"), Vector3(0, 0.28, 0.4), Vector3.ONE, Vector3(1.57, 0, 0))
 			for side in [-1, 1]:
-				add(root, cyl(0.0, 0.02, 0.12, 5), Color("f4ecd8"), Vector3(0.07 * side, 0.26, 0.42), Vector3.ONE, Vector3(-1.1, 0, 0))
+				# клыки: основание в морде, остриё наружу и вверх
+				add(root, cyl(0.0, 0.022, 0.13, 5), Color("f4ecd8"), Vector3(0.075 * side, 0.27, 0.43), Vector3.ONE, Vector3(0.9, 0, -0.25 * side))
+				# уши-треугольники
+				add(root, cyl(0.0, 0.045, 0.1, 3), b.darkened(0.2), Vector3(0.07 * side, 0.43, 0.25), Vector3(1, 1, 0.5), Vector3(-0.3, 0, -0.35 * side))
 				add(root, sphere(0.02, 6), Color("ff5a3a"), Vector3(0.05 * side, 0.36, 0.385), Vector3.ONE, Vector3.ZERO, 2.0)
 				for fz in [-0.14, 0.14]:
 					add(root, cyl(0.035, 0.035, 0.16, 6), b.darkened(0.3), Vector3(0.1 * side, 0.08, fz))
@@ -274,12 +277,7 @@ static func shard() -> Node3D:
 	add(pivot, cyl(0.0, 0.13, 0.28, 6), c, Vector3(0, 0.14, 0), Vector3.ONE, Vector3.ZERO, 1.6)
 	add(pivot, cyl(0.13, 0.0, 0.22, 6), c.darkened(0.15), Vector3(0, -0.11, 0), Vector3.ONE, Vector3.ZERO, 1.2)
 	add(root, cyl(0.22, 0.26, 0.06, 10), Color("8a8478"), Vector3(0, 0.03, 0))
-	var l := OmniLight3D.new()
-	l.light_color = c
-	l.omni_range = 2.2
-	l.light_energy = 1.4
-	l.position = Vector3(0, 0.5, 0)
-	root.add_child(l)
+	add(root, cyl(0.2, 0.2, 0.01, 16), Color(0.5, 0.9, 1.0, 0.35), Vector3(0, 0.065, 0), Vector3.ONE, Vector3.ZERO, 1.5)
 	root.set_script(Bobber)
 	root.set("spin", true)
 	return root

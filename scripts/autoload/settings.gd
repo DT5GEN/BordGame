@@ -10,6 +10,7 @@ var music_vol := 0.6
 var sfx_vol := 0.8
 var music_folder := ""
 var shuffle := true
+var eco := false
 var prefs := {}          # имя игрока -> {"view": "third"/"first", "music": true}
 
 var music: AudioStreamPlayer
@@ -39,6 +40,7 @@ func _ready() -> void:
 		if ResourceLoader.exists(path):
 			sfx[n] = load(path)
 	apply_volumes()
+	apply_video()
 	rebuild_playlist()
 	next_track()
 
@@ -57,6 +59,7 @@ func _load() -> void:
 	sfx_vol = cf.get_value("audio", "sfx_vol", sfx_vol)
 	music_folder = cf.get_value("audio", "music_folder", music_folder)
 	shuffle = cf.get_value("audio", "shuffle", shuffle)
+	eco = cf.get_value("video", "eco", eco)
 	prefs = cf.get_value("players", "prefs", {})
 
 func save() -> void:
@@ -65,6 +68,7 @@ func save() -> void:
 	cf.set_value("audio", "sfx_vol", sfx_vol)
 	cf.set_value("audio", "music_folder", music_folder)
 	cf.set_value("audio", "shuffle", shuffle)
+	cf.set_value("video", "eco", eco)
 	cf.set_value("players", "prefs", prefs)
 	cf.save(PATH)
 
@@ -75,6 +79,10 @@ func apply_volumes() -> void:
 	AudioServer.set_bus_mute(mi, music_vol <= 0.001 or not music_enabled)
 	AudioServer.set_bus_volume_db(si, linear_to_db(maxf(sfx_vol, 0.0001)))
 	AudioServer.set_bus_mute(si, sfx_vol <= 0.001)
+
+func apply_video() -> void:
+	Engine.max_fps = 30 if eco else 60
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 
 func set_music_enabled(on: bool) -> void:
 	music_enabled = on

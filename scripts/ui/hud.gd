@@ -24,7 +24,6 @@ var selected_die := "D6"
 var root: Control
 var hero_panel: PanelContainer
 var name_lbl: Label
-var title_lbl: Label
 var hp_bar: ProgressBar
 var hp_lbl: Label
 var shard_lbl: Label
@@ -51,6 +50,7 @@ var modal: ColorRect
 var alert_closable := false
 var banner: VBoxContainer
 var view_btn: Button
+var confirm_bar: PanelContainer
 
 func _ready() -> void:
 	layer = 5
@@ -111,50 +111,48 @@ func _ready() -> void:
 # ------------------------------------------------------------ построение
 func _build_hero_panel() -> void:
 	hero_panel = PanelContainer.new()
-	hero_panel.position = Vector2(12, 12)
-	hero_panel.custom_minimum_size = Vector2(330, 0)
+	hero_panel.position = Vector2(10, 10)
+	hero_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS, Color(Style.GOLD, 0.45), 2, 12, 8))
 	root.add_child(hero_panel)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 4)
+	v.add_theme_constant_override("separation", 2)
 	hero_panel.add_child(v)
 	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
 	v.add_child(h)
 	dot = Panel.new()
-	dot.custom_minimum_size = Vector2(22, 22)
+	dot.custom_minimum_size = Vector2(16, 16)
 	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	h.add_child(dot)
-	name_lbl = Style.label("", 28, Style.PARCH, Style.font_title)
+	name_lbl = Style.label("", 22, Style.PARCH, Style.font_title)
 	h.add_child(name_lbl)
-	title_lbl = Style.label("", 17, Color(Style.PARCH, 0.7))
-	v.add_child(title_lbl)
-	var hh := HBoxContainer.new()
-	v.add_child(hh)
-	hh.add_child(Style.label("HP", 20, Style.RED, Style.font_bold))
 	hp_bar = ProgressBar.new()
 	hp_bar.max_value = 20
 	hp_bar.show_percentage = false
-	hp_bar.custom_minimum_size = Vector2(190, 22)
+	hp_bar.custom_minimum_size = Vector2(130, 14)
 	hp_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	hh.add_child(hp_bar)
-	hp_lbl = Style.label("20/20", 20, Style.PARCH, Style.font_bold)
-	hh.add_child(hp_lbl)
-	shard_lbl = Style.label("", 22, Style.TEAL, Style.font_bold)
-	v.add_child(shard_lbl)
-	info_lbl = Style.label("", 17, Color(Style.PARCH, 0.85))
-	v.add_child(info_lbl)
-	status_lbl = Style.label("", 17, Color("ffb070"))
-	status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	status_lbl.custom_minimum_size.x = 300
+	h.add_child(hp_bar)
+	hp_lbl = Style.label("20/20", 17, Style.PARCH, Style.font_bold)
+	h.add_child(hp_lbl)
+	var h2 := HBoxContainer.new()
+	h2.add_theme_constant_override("separation", 10)
+	v.add_child(h2)
+	shard_lbl = Style.label("", 18, Style.TEAL, Style.font_bold)
+	h2.add_child(shard_lbl)
+	info_lbl = Style.label("", 15, Color(Style.PARCH, 0.85))
+	info_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h2.add_child(info_lbl)
+	status_lbl = Style.label("", 15, Color("ffb070"), Style.font_bold)
 	v.add_child(status_lbl)
 
 func _build_top() -> void:
 	var tp := PanelContainer.new()
 	tp.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	tp.position = Vector2(-210, 10)
-	tp.custom_minimum_size = Vector2(420, 0)
-	tp.add_theme_stylebox_override("panel", Style.sb(Style.WOOD, Style.GOLD, 2, 20, 8))
+	tp.position = Vector2(-180, 10)
+	tp.custom_minimum_size = Vector2(360, 0)
+	tp.add_theme_stylebox_override("panel", Style.sb(Style.GLASS, Color(Style.GOLD, 0.45), 2, 18, 6))
 	root.add_child(tp)
-	time_lbl = Style.label("", 22, Style.PARCH, Style.font_bold)
+	time_lbl = Style.label("", 18, Style.PARCH, Style.font_bold)
 	time_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tp.add_child(time_lbl)
 	var rcol := VBoxContainer.new()
@@ -188,6 +186,7 @@ func _build_top() -> void:
 
 func _build_bottom() -> void:
 	bottom = PanelContainer.new()
+	bottom.add_theme_stylebox_override("panel", Style.sb(Style.GLASS, Color(Style.GOLD, 0.45), 2, 14, 8))
 	bottom.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	bottom.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	bottom.grow_vertical = Control.GROW_DIRECTION_BEGIN
@@ -266,10 +265,8 @@ func refresh() -> void:
 	if game == null or game.players.is_empty():
 		return
 	var p: Dictionary = game.current()
-	var pr: Dictionary = DB.heroes[p.hero]
 	name_lbl.text = p.name
-	title_lbl.text = pr["title"] + (" • с питомцем" if p.pet else "")
-	dot.add_theme_stylebox_override("panel", Style.sb(p.color, Color.WHITE, 2, 11, 0))
+	dot.add_theme_stylebox_override("panel", Style.sb(p.color, Color.WHITE, 2, 8, 0))
 	hp_bar.value = p.hp
 	hp_lbl.text = "%d/20" % p.hp
 	var gems := ""
@@ -277,9 +274,9 @@ func refresh() -> void:
 		gems += "◆ " if p.shards > i else "◇ "
 	if p.shards > 3:
 		gems += "+%d" % (p.shards - 3)
-	shard_lbl.text = "Осколки: " + gems
+	shard_lbl.text = gems.strip_edges()
 	var rows: int = game.map.shrine.y - p.pos.y
-	info_lbl.text = "Ловушек: %d • Предметов: %d • До святилища: %d" % [p.hand.size(), p.items.size(), rows]
+	info_lbl.text = "Ловушки %d • Сумка %d • До цели %d" % [p.hand.size(), p.items.size(), rows]
 	var st: Array = []
 	if p.now_skip_move:
 		st.append("застрял")
@@ -413,20 +410,20 @@ func alert(title: String, text: String, col: Color = Style.GOLD) -> void:
 		return
 	for c in alert_panel.get_children():
 		c.free()
-	alert_panel.add_theme_stylebox_override("panel", Style.sb(Color(0.1, 0.07, 0.05, 0.96), col, 3, 18, 22))
+	alert_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, col, 2, 16, 16))
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)
 	alert_panel.add_child(v)
-	v.add_child(_wrap_label(title, 38, col, 560, Style.font_title))
-	v.add_child(_wrap_label(text, 24, Style.PARCH, 560))
-	var b := Style.button("Понятно", 26, 200)
+	v.add_child(_wrap_label(title, 30, col.lightened(0.2), 480, Style.font_title))
+	v.add_child(_wrap_label(text, 20, Style.PARCH, 480))
+	var b := Style.button("Понятно", 22, 180)
 	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	b.pressed.connect(func(): _alert_closed.emit())
 	v.add_child(b)
 	alert_panel.modulate.a = 0.0
 	alert_panel.visible = true
 	_show_modal(0.35)
-	await _place_center(alert_panel, 620)
+	await _place_center(alert_panel, 520)
 	alert_closable = true
 	var tw := create_tween()
 	tw.tween_property(alert_panel, "modulate:a", 1.0, 0.2)
@@ -435,10 +432,11 @@ func alert(title: String, text: String, col: Color = Style.GOLD) -> void:
 	_hide_modal()
 
 # ------------------------------------------------------------ интерактивный бой
+const BW := 520.0
 class QTE extends Control:
 	## Кольцо сжимается к кругу. Нажми, когда они совпадут, — блок щитом.
 	signal done(ok: bool)
-	const R0 := 44.0
+	const R0 := 38.0
 	const TOL := 15.0
 	var t := 0.0
 	var dur := 1.4
@@ -446,7 +444,7 @@ class QTE extends Control:
 	var ok := false
 
 	func _ready() -> void:
-		custom_minimum_size = Vector2(200, 200)
+		custom_minimum_size = Vector2(170, 170)
 		mouse_filter = Control.MOUSE_FILTER_STOP
 		dur = randf_range(1.15, 1.6)
 
@@ -495,7 +493,7 @@ class QTE extends Control:
 			draw_arc(c, R0 + 8, 0, TAU, 64, Color("6fd07a") if ok else Color("ff6a5a"), 10.0, true)
 
 ## Бой в 2 шага: защита (кольцо) → свой бросок кубика. Возвращает {blocked, bonus, roll, total}.
-func battle(hero_name: String, foe_name: String, foe_info: String, need_text: String, pvp: bool) -> Dictionary:
+func battle(hero_name: String, foe_name: String, foe_info: String, need_text: String, pvp: bool, hero_col: Color = Style.GOLD) -> Dictionary:
 	if fast:
 		var bl := randf() < 0.5
 		var r := randi_range(1, 6)
@@ -504,23 +502,30 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 		return {"blocked": bl, "bonus": bn, "roll": r, "total": maxi(1, r + bn)}
 	for c in alert_panel.get_children():
 		c.free()
-	alert_panel.add_theme_stylebox_override("panel", Style.sb(Color(0.1, 0.07, 0.05, 0.94), Style.RED, 3, 18, 18))
+	alert_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS, Color(Style.RED, 0.7), 2, 16, 12))
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 6)
+	v.add_theme_constant_override("separation", 2)
 	alert_panel.add_child(v)
-	v.add_child(_wrap_label("%s  против  %s" % [hero_name, foe_name], 34, Style.RED, 700, Style.font_title))
+	var th := HBoxContainer.new()
+	th.alignment = BoxContainer.ALIGNMENT_CENTER
+	th.add_theme_constant_override("separation", 12)
+	v.add_child(th)
+	th.add_child(Style.outlined(Style.label(hero_name, 26, hero_col.lightened(0.25), Style.font_title), 4))
+	th.add_child(Style.label("против", 18, Color(Style.PARCH, 0.6), Style.font_bold))
+	th.add_child(Style.outlined(Style.label(foe_name, 26, Color("ff7a6a"), Style.font_title), 4))
 	if foe_info != "":
-		v.add_child(_wrap_label(foe_info, 20, Color(Style.PARCH, 0.75), 700))
-	var hint := _wrap_label("%s атакует! Нажми на щит, когда кольцо станет зелёным" % foe_name, 24, Style.GOLD, 700, Style.font_bold)
+		v.add_child(_wrap_label(foe_info, 16, Color(Style.PARCH, 0.75), BW))
+	var hint := _wrap_label("%s атакует! Жми на щит, когда кольцо зелёное" % foe_name, 19, Style.GOLD, BW, Style.font_bold)
 	v.add_child(hint)
 	var center := CenterContainer.new()
 	v.add_child(center)
 	var qte := QTE.new()
 	center.add_child(qte)
+	bottom.visible = false
 	alert_panel.visible = true
 	alert_panel.modulate.a = 1.0
 	_show_modal(0.0)
-	await _place_center(alert_panel, 740, 16)
+	await _place_center(alert_panel, BW + 30, 10)
 	await get_tree().create_timer(0.7).timeout
 	battle_event.emit("enemy_attack")
 	qte.set_process(true)
@@ -531,11 +536,11 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 	hint.add_theme_color_override("font_color", Style.GREEN if blocked else Style.RED)
 	await get_tree().create_timer(0.9).timeout
 	center.queue_free()
-	var num := Style.label("?", 96, Style.GOLD, Style.font_title)
+	var num := Style.outlined(Style.label("?", 60, Style.GOLD, Style.font_title), 6)
 	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(num)
-	v.add_child(_wrap_label(need_text, 21, Color(Style.PARCH, 0.85), 700))
-	var rb := Style.button("Бросить кубик!", 30, 300)
+	v.add_child(_wrap_label(need_text, 16, Color(Style.PARCH, 0.85), BW))
+	var rb := Style.button("Бросить кубик!", 24, 240)
 	rb.add_theme_font_override("font", Style.font_title)
 	rb.add_theme_stylebox_override("normal", Style.sb(Color("8a3b1f"), Style.GOLD, 3, 14, 12))
 	rb.add_theme_stylebox_override("hover", Style.sb(Color("a84a28"), Color.WHITE, 3, 14, 12))
@@ -543,7 +548,7 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 	var pressed := [false]
 	rb.pressed.connect(func(): pressed[0] = true)
 	v.add_child(rb)
-	await _place_center(alert_panel, 740, 16)
+	await _place_center(alert_panel, BW + 30, 10)
 	while not pressed[0]:
 		await get_tree().process_frame
 	rb.disabled = true
@@ -565,12 +570,12 @@ func battle_finish(result: String, win: bool) -> void:
 		await get_tree().process_frame
 		return
 	var v: VBoxContainer = alert_panel.get_child(0)
-	v.add_child(_wrap_label(result, 26, Style.GREEN if win else Style.RED, 700, Style.font_bold))
-	var b := Style.button("Дальше", 26, 200)
+	v.add_child(_wrap_label(result, 20, Style.GREEN if win else Color("ff7a6a"), BW, Style.font_bold))
+	var b := Style.button("Дальше", 22, 180)
 	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	b.pressed.connect(func(): _alert_closed.emit())
 	v.add_child(b)
-	await _place_center(alert_panel, 740, 16)
+	await _place_center(alert_panel, BW + 30, 10)
 	alert_closable = true
 	await _alert_closed
 	alert_panel.visible = false
@@ -626,7 +631,7 @@ func show_pass(p: Dictionary, reports: Array) -> void:
 func _open_popup(title: String) -> VBoxContainer:
 	for c in popup.get_children():
 		c.queue_free()
-	popup.add_theme_stylebox_override("panel", Style.sb(Color(0.1, 0.07, 0.05, 0.97), Style.GOLD, 3, 18, 16))
+	popup.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, Color(Style.GOLD, 0.6), 2, 16, 14))
 	var v := VBoxContainer.new()
 	popup.add_child(v)
 	var h := HBoxContainer.new()
@@ -638,7 +643,7 @@ func _open_popup(title: String) -> VBoxContainer:
 	x.pressed.connect(_close_popup)
 	h.add_child(x)
 	var sc := ScrollContainer.new()
-	sc.custom_minimum_size = Vector2(640, 380)
+	sc.custom_minimum_size = Vector2(560, 300)
 	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(sc)
 	var list := VBoxContainer.new()
@@ -646,7 +651,7 @@ func _open_popup(title: String) -> VBoxContainer:
 	sc.add_child(list)
 	popup.visible = true
 	popup.move_to_front()
-	_place_center(popup, 680)
+	_place_center(popup, 600)
 	return list
 
 func _close_popup() -> void:
@@ -689,11 +694,34 @@ func _show_bag() -> void:
 		list.add_child(b)
 
 func _confirm_menu() -> void:
-	var list := _open_popup("Выйти в меню?")
-	list.add_child(Style.label("Партия не сохранится.", 22))
-	var b := Style.button("Да, в меню", 24)
-	b.pressed.connect(func(): menu_requested.emit())
-	list.add_child(b)
+	_close_popup()
+	if confirm_bar and is_instance_valid(confirm_bar):
+		confirm_bar.queue_free()
+	confirm_bar = PanelContainer.new()
+	confirm_bar.add_theme_stylebox_override("panel", Style.sb(Style.GLASS, Color(Style.GOLD, 0.5), 2, 14, 10))
+	root.add_child(confirm_bar)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 14)
+	confirm_bar.add_child(h)
+	var stay := Style.button("Остаться", 22, 150)
+	stay.add_theme_stylebox_override("normal", Style.sb(Color("9a2f26"), Color(Style.GOLD, 0.7), 2, 12, 10))
+	stay.add_theme_stylebox_override("hover", Style.sb(Color("b8392e"), Color.WHITE, 2, 12, 10))
+	stay.pressed.connect(func(): confirm_bar.queue_free())
+	h.add_child(stay)
+	var l := Style.label("Выйти в меню? Партия не сохранится.", 19, Style.PARCH, Style.font_bold)
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(l)
+	var go := Style.button("Выйти", 16, 70)
+	go.add_theme_stylebox_override("normal", Style.sb(Color("c9b48a"), Color("8a7450"), 1, 10, 6))
+	go.add_theme_stylebox_override("hover", Style.sb(Color("e0cda4"), Color.WHITE, 1, 10, 6))
+	go.add_theme_color_override("font_color", Color("3b2a1a"))
+	go.add_theme_color_override("font_hover_color", Color("1e140b"))
+	go.pressed.connect(func(): menu_requested.emit())
+	h.add_child(go)
+	confirm_bar.reset_size()
+	await get_tree().process_frame
+	var vs := root.get_viewport_rect().size
+	confirm_bar.position = Vector2((vs.x - confirm_bar.size.x) * 0.5, 74)
 
 func show_victory(p: Dictionary) -> void:
 	set_phase("over")
