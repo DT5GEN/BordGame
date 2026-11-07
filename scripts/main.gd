@@ -14,6 +14,11 @@ func _ready() -> void:
 		_bench.call_deferred()
 	elif "--simtest" in OS.get_cmdline_user_args():
 		_simtest.call_deferred()
+	elif "--herotest" in OS.get_cmdline_user_args():
+		show_menu()
+		await _wait(2.6)
+		await _shot("hero_menu")
+		get_tree().quit()
 	elif "--introtest" in OS.get_cmdline_user_args():
 		_introtest.call_deferred()
 	else:

@@ -31,5 +31,5 @@ func _process(delta: float) -> void:
 			l.rotation.x = lerpf(l.rotation.x, 0.0, minf(delta * 10.0, 1.0))
 		_arms[0].rotation.x = lerpf(_arms[0].rotation.x, 0.0, minf(delta * 10.0, 1.0))
 		_arms[1].rotation.x = lerpf(_arms[1].rotation.x, 0.0, minf(delta * 10.0, 1.0))
-		_arms[0].rotation.z = -0.08 - sin(_t * 2.4) * 0.03
-		_arms[1].rotation.z = 0.08 + sin(_t * 2.4) * 0.03
+		_arms[0].rotation.z = 0.08 + sin(_t * 2.4) * 0.03
+		_arms[1].rotation.z = -0.08 - sin(_t * 2.4) * 0.03
