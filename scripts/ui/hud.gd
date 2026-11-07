@@ -574,9 +574,13 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 	alert_panel.modulate.a = 1.0
 	_show_modal(0.0)
 	await _place_center(alert_panel, BW + 30, 10)
-	await get_tree().create_timer(qte.PREP).timeout
+	# ждём старта кольца и его окончания опросом — так нажатие в любой момент не «потеряется»
+	while not qte.started and not qte.finished:
+		await get_tree().process_frame
 	battle_event.emit("enemy_attack")
-	var blocked: bool = await qte.done
+	while not qte.finished:
+		await get_tree().process_frame
+	var blocked: bool = qte.ok
 	current_qte = null
 	battle_event.emit("block" if blocked else "hit")
 	var bonus := (3 if agile else 2) if blocked else -1

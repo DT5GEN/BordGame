@@ -46,6 +46,34 @@ func _ready() -> void:
 		DB.load_cards()
 		print("RESET: trap0 dmg=", DB.traps[0]["fx"]["dmg"], " cost=", DB.trap_price(0), " text=", DB.traps[0]["text"])
 		get_tree().quit()
+	elif "--qtetest" in OS.get_cmdline_user_args():
+		start_game({"players": [{"name": "А", "hero": 0, "pet": false, "slot": 0}], "size": Vector2i(18, 38), "show_rules": false})
+		var g = current
+		await _wait(1.0)
+		for tries in 3:
+			var res := [null]
+			var f := func(): res[0] = await g.hud.battle("А", "Волк", "", "", false)
+			f.call()
+			while g.hud.current_qte == null:
+				await get_tree().process_frame
+			var q = g.hud.current_qte
+			while not q.started:
+				await get_tree().process_frame
+			q.press()
+			for k in 30:
+				await get_tree().process_frame
+			var rb = _find_button(g.hud.alert_panel, "Бросить кубик!")
+			var t0 := Time.get_ticks_msec()
+			while rb == null and Time.get_ticks_msec() - t0 < 3000:
+				await get_tree().process_frame
+				rb = _find_button(g.hud.alert_panel, "Бросить кубик!")
+			print("QTE try ", tries, ": roll button appeared=", rb != null)
+			if rb:
+				rb.pressed.emit()
+			while res[0] == null:
+				await get_tree().process_frame
+			print("   result=", res[0])
+		get_tree().quit()
 	elif "--herotest" in OS.get_cmdline_user_args():
 		show_menu()
 		await _wait(2.6)
