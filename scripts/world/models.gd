@@ -96,6 +96,14 @@ static func hero(pr: Dictionary) -> Node3D:
 		body.add_child(arm)
 		add(arm, capsule(0.047, 0.24), top, Vector3(0, -0.1, 0))
 		add(arm, sphere(0.048, 10), skin, Vector3(0, -0.225, 0))
+		if side > 0:
+			# палка-меч
+			add(arm, cyl(0.018, 0.022, 0.42, 6), Color("8a5a2b"), Vector3(0, -0.24, 0.17), Vector3.ONE, Vector3(1.5, 0, 0))
+			add(arm, box(Vector3(0.1, 0.025, 0.03)), Color("5a3a1a"), Vector3(0, -0.235, 0.02))
+		else:
+			# деревянный щит
+			add(arm, cyl(0.11, 0.11, 0.03, 14), Color("8a5a2b"), Vector3(-0.045, -0.16, 0.02), Vector3.ONE, Vector3(0, 0, 1.5708))
+			add(arm, cyl(0.035, 0.035, 0.04, 8), Color("c9c9c9"), Vector3(-0.065, -0.16, 0.02), Vector3.ONE, Vector3(0, 0, 1.5708))
 	var head := Node3D.new()
 	head.name = "Head"
 	head.position = Vector3(0, 0.75, 0)

@@ -5,6 +5,7 @@ signal start_requested(cfg: Dictionary)
 
 const Models = preload("res://scripts/world/models.gd")
 const Papyrus = preload("res://scripts/ui/papyrus.gd")
+const SettingsPanel = preload("res://scripts/ui/settings_panel.gd")
 
 const SIZES := [
 	["Малая", Vector2i(18, 38), "≈10 мин"],
@@ -25,6 +26,7 @@ var preview_hero: Node3D
 var preview_name: Label
 var preview_title: Label
 var papyrus
+var settings_panel
 
 func _ready() -> void:
 	theme = Style.theme
@@ -46,6 +48,8 @@ func _ready() -> void:
 	_build()
 	papyrus = Papyrus.new()
 	add_child(papyrus)
+	settings_panel = SettingsPanel.new()
+	add_child(settings_panel)
 	_refresh()
 
 func _build() -> void:
@@ -186,6 +190,9 @@ void fragment() {
 	var rb := Style.button("Свиток правил", 22)
 	rb.pressed.connect(func(): papyrus.open())
 	bh.add_child(rb)
+	var sbn := Style.button("Настройки", 22)
+	sbn.pressed.connect(func(): settings_panel.open())
+	bh.add_child(sbn)
 
 func _set_count(n: int) -> void:
 	count = clampi(n, 1, 6)

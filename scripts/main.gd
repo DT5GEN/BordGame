@@ -88,6 +88,20 @@ func _autotest() -> void:
 		g._walk(g._path_to(best))
 		await _wait(4.0)
 	await _shot("06_after_walk")
+	g._set_view(true, false)
+	await _wait(1.5)
+	await _shot("06b_first_person")
+	g._set_view(false, false)
+	Settings.music_folder = "/tmp/claude-0/testmusic"
+	Settings.rebuild_playlist()
+	Settings.next_track()
+	print("MUSIC: tracks=", Settings.playlist.size(), " now=", Settings.current_track)
+	g.settings_panel.open("Тимур")
+	await _wait(0.8)
+	await _shot("06c_settings")
+	g.settings_panel.close()
+	Settings.music_folder = ""
+	Settings.save()
 	g.papyrus.open()
 	await _wait(1.0)
 	await _shot("07_papyrus")
@@ -153,10 +167,38 @@ func _autotest() -> void:
 			break
 	await _wait(2.0)
 	await _shot("14_beast")
-	g.hud.show_duel("Тимур", 5, "Серый волк", 4, true, "Чтобы победить, нужно 4+")
-	await _wait(1.5)
-	await _shot("15_duel")
+	# окно-сообщение (баг с высоким окном)
+	g.hud.alert("Ловушка «Колючая яма»!", "Её спрятал(а) Мира.\n−3 HP\nв следующий ход ещё −1 HP", Color("3d8bff"))
+	await _wait(1.0)
+	await _shot("15a_alert")
 	g.hud._alert_closed.emit()
+	await _wait(0.3)
+	# интерактивный бой с волком
+	var wolf_t = null
+	for t in g.objects:
+		if g.objects[t]["type"] == "beast" and g.objects[t]["kind"] == "wolf":
+			wolf_t = t
+			break
+	var hero = g.players[0]
+	var adj: Vector2i = wolf_t + Vector2i(0, -1)
+	hero.pos = adj
+	hero.node.position = g.map.world_pos(adj)
+	g.refresh_view()
+	g._fight_beast(hero, wolf_t, g.objects[wolf_t])
+	await _wait(1.3)
+	await _shot("15b_battle_qte")
+	var qte = _find(g.hud.alert_panel, "QTE")
+	if qte:
+		qte.press()
+	await _wait(1.6)
+	await _shot("15c_battle_roll")
+	var rb = _find_button(g.hud.alert_panel, "Бросить кубик!")
+	if rb:
+		rb.pressed.emit()
+	await _wait(2.0)
+	await _shot("15d_battle_result")
+	g.hud._alert_closed.emit()
+	await _wait(0.5)
 	g._victory(g.players[0])
 	await _wait(2.0)
 	await _shot("16_victory")
@@ -258,3 +300,21 @@ func _simtest() -> void:
 		Engine.time_scale = 1.0
 	print("SIMTEST DONE")
 	get_tree().quit()
+
+func _find(n: Node, cls: String) -> Node:
+	for c in n.get_children():
+		if c.get_script() != null and str(c.get_script().resource_path).contains("hud.gd") and c is Control and c.has_method("press"):
+			return c
+		var r = _find(c, cls)
+		if r:
+			return r
+	return null
+
+func _find_button(n: Node, txt: String) -> Button:
+	for c in n.get_children():
+		if c is Button and c.text == txt:
+			return c
+		var r = _find_button(c, txt)
+		if r:
+			return r
+	return null

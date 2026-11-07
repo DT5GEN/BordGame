@@ -24,7 +24,7 @@ static func tile_color(tt: int, x: int, z: int, rng: RandomNumberGenerator) -> C
 	return Color(clampf(c.r + checker + v, 0, 1), clampf(c.g + checker + v, 0, 1), clampf(c.b + checker * 0.5 + v * 0.5, 0, 1))
 
 static func build(map, parent: Node3D) -> Dictionary:
-	var info := {"tile_ref": {}, "foliage_mat": null, "water_mat": null}
+	var info := {"tile_ref": {}, "decor_ref": {}, "bridge_nodes": {}, "foliage_mat": null, "water_mat": null}
 	var rng := RandomNumberGenerator.new()
 	rng.seed = map.rng.seed + 77
 	var groups := {}
@@ -67,12 +67,13 @@ static func build(map, parent: Node3D) -> Dictionary:
 		mmi.material_override = tile_mat
 		parent.add_child(mmi)
 	_trees(map, parent, rng, info)
-	_decor(map, parent, rng)
+	_decor(map, parent, rng, info)
 	for b in map.bridges:
 		var bp: Vector2i = b
 		var bn := Models.bridge_tile()
 		bn.position = Vector3(bp.x, map.height(bp), bp.y)
 		parent.add_child(bn)
+		info["bridge_nodes"][bp] = bn
 	# Вода вокруг и в реках
 	var water := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
@@ -89,7 +90,7 @@ static func build(map, parent: Node3D) -> Dictionary:
 	info["water_mat"] = wm
 	return info
 
-static func _mm(mesh: Mesh, items: Array, mat: Material, parent: Node3D, shadows := true) -> void:
+static func _mm(mesh: Mesh, items: Array, mat: Material, parent: Node3D, shadows := true, info: Dictionary = {}) -> void:
 	if items.is_empty():
 		return
 	var mm := MultiMesh.new()
@@ -100,6 +101,11 @@ static func _mm(mesh: Mesh, items: Array, mat: Material, parent: Node3D, shadows
 	for i in items.size():
 		mm.set_instance_transform(i, items[i][0])
 		mm.set_instance_color(i, items[i][1])
+		if items[i].size() > 2 and info.has("decor_ref"):
+			var tp: Vector2i = items[i][2]
+			if not info["decor_ref"].has(tp):
+				info["decor_ref"][tp] = []
+			info["decor_ref"][tp].append([mm, i, items[i][1]])
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	mmi.material_override = mat
@@ -136,30 +142,30 @@ static func _trees(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 				var off := Vector3(cos(a) * rr, 0, sin(a) * rr)
 				var base := Vector3(x, map.height(p), z) + off
 				var s := rng.randf_range(0.75, 1.15)
-				trunks.append([Transform3D(Basis.from_scale(Vector3(s, s, s)), base + Vector3(0, 0.15 * s, 0)), Color("6b4a2c")])
+				trunks.append([Transform3D(Basis.from_scale(Vector3(s, s, s)), base + Vector3(0, 0.15 * s, 0)), Color("6b4a2c"), p])
 				var g := Color(rng.randf_range(0.16, 0.26), rng.randf_range(0.42, 0.58), rng.randf_range(0.18, 0.26))
 				if rng.randf() < 0.55:
-					pines.append([Transform3D(Basis.from_scale(Vector3(s, s, s)), base + Vector3(0, 0.45 * s, 0)), g])
-					pines.append([Transform3D(Basis.from_scale(Vector3(s * 0.75, s * 0.8, s * 0.75)), base + Vector3(0, 0.75 * s, 0)), g.lightened(0.08)])
+					pines.append([Transform3D(Basis.from_scale(Vector3(s, s, s)), base + Vector3(0, 0.45 * s, 0)), g, p])
+					pines.append([Transform3D(Basis.from_scale(Vector3(s * 0.75, s * 0.8, s * 0.75)), base + Vector3(0, 0.75 * s, 0)), g.lightened(0.08), p])
 				else:
 					var g2 := Color(rng.randf_range(0.30, 0.45), rng.randf_range(0.55, 0.70), rng.randf_range(0.20, 0.30))
-					rounds.append([Transform3D(Basis.from_scale(Vector3(s, s * 0.9, s)), base + Vector3(0, 0.58 * s, 0)), g2])
+					rounds.append([Transform3D(Basis.from_scale(Vector3(s, s * 0.9, s)), base + Vector3(0, 0.58 * s, 0)), g2, p])
 	var fm := ShaderMaterial.new()
 	fm.shader = load("res://shaders/foliage.gdshader")
 	info["foliage_mat"] = fm
 	var trunk_mat := StandardMaterial3D.new()
 	trunk_mat.vertex_color_use_as_albedo = true
 	trunk_mat.vertex_color_is_srgb = true
-	_mm(Models.cyl(0.045, 0.065, 0.32, 6), trunks, trunk_mat, parent)
-	_mm(Models.cyl(0.0, 0.3, 0.55, 7), pines, fm, parent)
+	_mm(Models.cyl(0.045, 0.065, 0.32, 6), trunks, trunk_mat, parent, true, info)
+	_mm(Models.cyl(0.0, 0.3, 0.55, 7), pines, fm, parent, true, info)
 	var blob := SphereMesh.new()
 	blob.radius = 0.3
 	blob.height = 0.6
 	blob.radial_segments = 8
 	blob.rings = 5
-	_mm(blob, rounds, fm, parent)
+	_mm(blob, rounds, fm, parent, true, info)
 
-static func _decor(map, parent: Node3D, rng: RandomNumberGenerator) -> void:
+static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictionary) -> void:
 	var flowers: Array = []
 	var tufts: Array = []
 	var boulders: Array = []
@@ -174,12 +180,12 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator) -> void:
 					var c: Color = fcols[rng.randi() % fcols.size()]
 					for k in rng.randi_range(1, 3):
 						var off := Vector3(rng.randf_range(-0.42, 0.42), 0.03, rng.randf_range(-0.42, 0.42))
-						flowers.append([Transform3D(Basis(), Vector3(x, y, z) + off), c])
+						flowers.append([Transform3D(Basis(), Vector3(x, y, z) + off), c, p])
 				if rng.randf() < 0.5:
 					for k in rng.randi_range(1, 3):
 						var off := Vector3(rng.randf_range(-0.42, 0.42), 0.05, rng.randf_range(-0.42, 0.42))
 						var g := Color(rng.randf_range(0.3, 0.42), rng.randf_range(0.6, 0.75), rng.randf_range(0.22, 0.3))
-						tufts.append([Transform3D(Basis().rotated(Vector3.UP, rng.randf() * TAU), Vector3(x, y, z) + off), g])
+						tufts.append([Transform3D(Basis().rotated(Vector3.UP, rng.randf() * TAU), Vector3(x, y, z) + off), g, p])
 			elif tt == M.ROCK:
 				var low: bool = y < 0.5
 				for k in (rng.randi_range(2, 3) if low else rng.randi_range(1, 2)):
@@ -187,7 +193,7 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator) -> void:
 					var s := rng.randf_range(0.8, 1.3) if low else rng.randf_range(0.6, 1.1)
 					var b := Basis().rotated(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, s * 0.7, s))
 					var gc := rng.randf_range(0.42, 0.55)
-					boulders.append([Transform3D(b, Vector3(x, y, z) + off), Color(gc, gc * 0.97, gc * 0.92)])
+					boulders.append([Transform3D(b, Vector3(x, y, z) + off), Color(gc, gc * 0.97, gc * 0.92), p])
 	var vm := StandardMaterial3D.new()
 	vm.vertex_color_use_as_albedo = true
 	vm.vertex_color_is_srgb = true
@@ -197,11 +203,11 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator) -> void:
 	fl.height = 0.06
 	fl.radial_segments = 6
 	fl.rings = 3
-	_mm(fl, flowers, vm, parent, false)
-	_mm(Models.cyl(0.0, 0.035, 0.12, 4), tufts, vm, parent, false)
+	_mm(fl, flowers, vm, parent, false, info)
+	_mm(Models.cyl(0.0, 0.035, 0.12, 4), tufts, vm, parent, false, info)
 	var bm := SphereMesh.new()
 	bm.radius = 0.3
 	bm.height = 0.6
 	bm.radial_segments = 6
 	bm.rings = 3
-	_mm(bm, boulders, vm, parent)
+	_mm(bm, boulders, vm, parent, true, info)

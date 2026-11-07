@@ -9,6 +9,7 @@ const Models = preload("res://scripts/world/models.gd")
 const Builder = preload("res://scripts/world/world_builder.gd")
 const HUD = preload("res://scripts/ui/hud.gd")
 const Papyrus = preload("res://scripts/ui/papyrus.gd")
+const SettingsPanel = preload("res://scripts/ui/settings_panel.gd")
 
 const MAX_HP := 20
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -54,6 +55,12 @@ var sky_mat: ProceduralSkyMaterial
 var darkness: MeshInstance3D
 var rain: CPUParticles3D
 var hl_mm: MultiMesh
+var fog_mm: MultiMesh
+var view_first := false
+var fp_yaw := 0.0
+var fp_pitch := -0.35
+var settings_panel
+var _in_fight := false
 var entities: Node3D
 var shrine_node: Node3D
 var hud
@@ -83,6 +90,7 @@ func _ready() -> void:
 	_spawn_objects()
 	_setup_players()
 	_setup_highlight()
+	_setup_fog()
 	_setup_darkness_and_rain()
 	_setup_camera()
 	var expected: float = map.h * 1.35 / 5.5
@@ -93,6 +101,11 @@ func _ready() -> void:
 	add_child(hud)
 	papyrus = Papyrus.new()
 	add_child(papyrus)
+	settings_panel = SettingsPanel.new()
+	add_child(settings_panel)
+	settings_panel.view_changed.connect(func(first): _set_view(first, false))
+	hud.settings_requested.connect(func(): settings_panel.open(players[cur].name))
+	hud.view_toggle_requested.connect(func(): _set_view(not view_first, true))
 	hud.roll_requested.connect(roll)
 	hud.end_turn_requested.connect(end_turn)
 	hud.trap_card_chosen.connect(start_trap_mode)
@@ -103,6 +116,7 @@ func _ready() -> void:
 	hud.cancel_mode.connect(_cancel_trap_mode)
 	hud.menu_requested.connect(func(): exit_to_menu.emit())
 	hud.restart_requested.connect(func(): restart_game.emit())
+	hud.battle_event.connect(_on_battle_event)
 	_set_time_visual(hour)
 	_roll_weather()
 	cam_target = players[0].node.position + Vector3(0, 0, 6)
@@ -228,8 +242,18 @@ func _setup_players() -> void:
 			"dot": 0, "skip_move": 0, "slow": 0, "skip_turn": 0, "block_traps": 0, "vuln": 0,
 			"now_skip_move": false, "now_slow": 0, "now_block_traps": false, "now_vuln": false,
 			"marks": {}, "campfire": start, "pet": pc.get("pet", false), "reports": [],
-			"discovered": {}, "die": "D6", "node": node, "lantern": lantern, "trail": [],
+			"discovered": {}, "explored": _initial_explored(), "die": "D6", "node": node, "lantern": lantern, "trail": [],
 		})
+
+func _initial_explored() -> Dictionary:
+	# Святилище все знают: это цель на юге
+	var e := {}
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var t: Vector2i = map.shrine + Vector2i(dx, dz)
+			if map.inb(t):
+				e[t] = true
+	return e
 
 func _setup_highlight() -> void:
 	hl_mm = MultiMesh.new()
@@ -294,9 +318,18 @@ func _process(delta: float) -> void:
 	if follow != null and is_instance_valid(follow):
 		cam_goal = follow.position
 	cam_target = cam_target.lerp(cam_goal, 1.0 - exp(-delta * 4.0))
-	var off := Vector3(sin(cam_yaw) * cos(cam_pitch), sin(cam_pitch), -cos(cam_yaw) * cos(cam_pitch)) * cam_dist
-	cam.position = cam_target + off
-	cam.look_at(cam_target + Vector3(0, 0.4, 0), Vector3.UP)
+	if view_first and not _in_fight and not game_over:
+		var n: Node3D = players[cur].node
+		var head := n.position + Vector3(0, 0.95, 0)
+		var dir := Vector3(sin(fp_yaw) * cos(fp_pitch), sin(fp_pitch), cos(fp_yaw) * cos(fp_pitch))
+		cam.position = cam.position.lerp(head - dir * 0.1, 1.0 - exp(-delta * 10.0))
+		cam.look_at(cam.position + dir, Vector3.UP)
+		cam.fov = lerpf(cam.fov, 72.0, delta * 6.0)
+	else:
+		var off := Vector3(sin(cam_yaw) * cos(cam_pitch), sin(cam_pitch), -cos(cam_yaw) * cos(cam_pitch)) * cam_dist
+		cam.position = cam_target + off
+		cam.look_at(cam_target + Vector3(0, 0.4, 0), Vector3.UP)
+		cam.fov = lerpf(cam.fov, 50.0, delta * 6.0)
 	if rain.emitting:
 		rain.position = cam_target + Vector3(0, 9, 3)
 	if info.get("foliage_mat"):
@@ -344,7 +377,11 @@ func _unhandled_input(e: InputEvent) -> void:
 			_dragging = true
 			follow = null
 		if _dragging:
-			_pan(e.relative)
+			if view_first and not _in_fight:
+				fp_yaw -= e.relative.x * 0.006
+				fp_pitch = clampf(fp_pitch - e.relative.y * 0.004, -1.2, 0.35)
+			else:
+				_pan(e.relative)
 	elif e is InputEventMagnifyGesture:
 		_zoom(1.0 / e.factor)
 	elif e is InputEventKey and e.pressed:
@@ -352,6 +389,16 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_Q: cam_yaw -= 0.2
 			KEY_E: cam_yaw += 0.2
 			KEY_SPACE: _focus_current()
+
+func _set_view(first: bool, save: bool) -> void:
+	view_first = first
+	if first:
+		fp_yaw = players[cur].node.rotation.y
+		fp_pitch = -0.35
+	if save:
+		Settings.set_pref(players[cur].name, "view", "first" if first else "third")
+	refresh_view()
+	hud.refresh()
 
 func _zoom(f: float) -> void:
 	cam_dist = clampf(cam_dist * f, 4.0, 28.0)
@@ -404,6 +451,9 @@ func _on_click(sp: Vector2) -> void:
 
 func _tile_hint(t: Vector2i) -> void:
 	var tt: int = map.get_t(t)
+	if not players[cur].explored.has(t):
+		hud.toast("Неизведанная земля. Подойди ближе, чтобы разглядеть.", Style.PARCH, 2.0)
+		return
 	var txt: String = MapGen.NAMES[tt]
 	var c: int = map.cost(t)
 	if c < 50:
@@ -433,6 +483,11 @@ func begin_turn() -> void:
 	mode = "move"
 	_clear_highlight()
 	follow = p.node
+	var pr: Dictionary = Settings.pref(p.name)
+	view_first = pr["view"] == "first"
+	fp_yaw = p.node.rotation.y
+	fp_pitch = -0.35
+	Settings.set_music_enabled(pr["music"])
 	refresh_view()
 	_update_shrine_sockets()
 	hud.set_phase("wait")
@@ -648,27 +703,46 @@ func can_see(p: Dictionary, t: Vector2i) -> bool:
 	return d <= r
 
 func _object_visible(o: Dictionary, p: Dictionary) -> bool:
+	var pos: Vector2i = o["pos"]
 	match o["type"]:
 		"campfire", "chest", "event":
-			return true
-	var pos: Vector2i = o["pos"]
+			return p.explored.has(pos)
 	return p.discovered.has(pos) or can_see(p, pos)
 
+## Туман войны: видимое — ярко, разведанное — тусклее, рядом с обзором — дымка с силуэтами, дальше — тьма.
 func refresh_view() -> void:
 	var p: Dictionary = players[cur]
 	var r := vision(p)
+	for dz in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var e: Vector2i = p.pos + Vector2i(dx, dz)
+			if map.inb(e):
+				p.explored[e] = true
 	var refs: Dictionary = info["tile_ref"]
+	var decor: Dictionary = info["decor_ref"]
+	var fog_items: Array = []
 	for t in refs:
 		var tp: Vector2i = t
 		var ref: Array = refs[t]
 		var base: Color = ref[2]
 		var d := maxi(absi(tp.x - p.pos.x), absi(tp.y - p.pos.y))
-		var k := 1.0 if d <= r else (0.72 if d <= r + 2 else 0.55)
-		var c := base * k
-		if night and tp.y <= dark_row:
-			c = c * 0.35 + Color(0.12, 0.03, 0.18) * 0.65
-		c.a = 1.0
+		var k := 1.0
+		if d > r:
+			if p.explored.has(tp):
+				k = 0.6
+			else:
+				k = 0.4
+				fog_items.append([tp, FOG_HAZE if d <= r + 2 else FOG_DARK])
+		var dark: bool = night and tp.y <= dark_row
+		var c := _tint(base, k, dark)
 		(ref[0] as MultiMesh).set_instance_color(ref[1], c)
+		if decor.has(tp):
+			for dr in decor[tp]:
+				(dr[0] as MultiMesh).set_instance_color(dr[1], _tint(dr[2], k, dark))
+	_set_fog(fog_items)
+	for bt in info["bridge_nodes"]:
+		var bd := maxi(absi(bt.x - p.pos.x), absi(bt.y - p.pos.y))
+		info["bridge_nodes"][bt].visible = p.explored.has(bt) or bd <= r + 2
 	for t in objects:
 		var o: Dictionary = objects[t]
 		if o["type"] in ["beast", "shard"] and can_see(p, t):
@@ -677,10 +751,45 @@ func refresh_view() -> void:
 	for i in players.size():
 		var q: Dictionary = players[i]
 		var vis: bool = i == cur or can_see(p, q.pos) or p.marks.has(i)
-		q.node.visible = vis
+		q.node.visible = vis and not (i == cur and view_first)
 		q.node.get_node("Ring").visible = i == cur
 	for tr in traps:
 		tr["node"].visible = tr["owner"] == cur
+
+func _tint(base: Color, k: float, dark: bool) -> Color:
+	var c := base * k
+	if dark:
+		c = c * 0.35 + Color(0.12, 0.03, 0.18) * 0.65
+	c.a = 1.0
+	return c
+
+const FOG_HAZE := Color(0.06, 0.07, 0.1, 0.62)
+const FOG_DARK := Color(0.02, 0.025, 0.04, 1.0)
+
+func _setup_fog() -> void:
+	fog_mm = MultiMesh.new()
+	fog_mm.transform_format = MultiMesh.TRANSFORM_3D
+	fog_mm.use_colors = true
+	var bm := BoxMesh.new()
+	bm.size = Vector3(1.0, 3.4, 1.0)
+	fog_mm.mesh = bm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.vertex_color_use_as_albedo = true
+	mat.disable_fog = true
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = fog_mm
+	mmi.material_override = mat
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mmi)
+
+func _set_fog(items: Array) -> void:
+	fog_mm.instance_count = items.size()
+	for i in items.size():
+		var t: Vector2i = items[i][0]
+		fog_mm.set_instance_transform(i, Transform3D(Basis(), Vector3(t.x, 1.0, t.y)))
+		fog_mm.set_instance_color(i, items[i][1])
 
 func _update_shrine_sockets() -> void:
 	var p: Dictionary = players[cur]
@@ -774,6 +883,8 @@ func _face(p: Dictionary, t: Vector2i) -> void:
 	var d: Vector2i = t - p.pos
 	if d != Vector2i.ZERO:
 		p.node.rotation.y = atan2(float(d.x), float(d.y))
+		if view_first:
+			fp_yaw = p.node.rotation.y
 
 func _move_hero(p: Dictionary, t: Vector2i, dur := 0.24) -> void:
 	var n: Node3D = p.node
@@ -847,18 +958,21 @@ func _on_enter(p: Dictionary, tile: Vector2i) -> bool:
 	if o != null:
 		match o["type"]:
 			"shard":
+				Settings.play("shard")
 				p.shards += 1
 				_remove_object(tile)
 				_float_text(p.node, "+1 осколок", Style.TEAL)
 				hud.toast("Ты нашёл осколок! Теперь у тебя %d из 3." % p.shards, Style.TEAL, 3.0)
 				_update_shrine_sockets()
 			"chest":
+				Settings.play("chest")
 				var lid: Node3D = o["node"].get_node("Lid")
 				var tw := create_tween()
 				tw.tween_property(lid, "rotation:x", -1.9, 0.4)
 				objects.erase(tile)
 				if o["content"] == "shard":
 					p.shards += 1
+					Settings.play("shard")
 					_float_text(p.node, "+1 осколок", Style.TEAL)
 					hud.toast("В сундуке сиял осколок! У тебя %d из 3." % p.shards, Style.TEAL, 3.0)
 					_update_shrine_sockets()
@@ -913,6 +1027,8 @@ func _give_loot(p: Dictionary) -> String:
 	return DB.items[k]["name"]
 
 func _event(p: Dictionary) -> void:
+	_stop_walk(p)
+	Settings.play("magic")
 	var r := rng.randi_range(0, 4)
 	match r:
 		0:
@@ -1045,6 +1161,8 @@ func _place_trap(t: Vector2i) -> void:
 	hud.refresh()
 
 func _trigger_trap(tr: Dictionary, p: Dictionary) -> void:
+	_stop_walk(p)
+	Settings.play("trap")
 	traps.erase(tr)
 	var n: Node3D = tr["node"]
 	n.visible = true
@@ -1137,12 +1255,24 @@ func _trigger_trap(tr: Dictionary, p: Dictionary) -> void:
 func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 	var def: Dictionary = DB.beasts[o["kind"]]
 	var power := int(def["power"])
-	var r := rng.randi_range(1, 6)
-	var win := r >= power
 	var n: Node3D = o["node"]
+	_stop_walk(p)
 	n.look_at(Vector3(p.node.position.x, n.position.y, p.node.position.z), Vector3.UP)
 	n.rotate_y(PI)
-	await hud.show_duel(p.name, r, def["name"], power, win, "Чтобы победить, нужно выбросить %d или больше" % power)
+	_begin_fight(p.node, n)
+	var info := "Сила: %d • Урон: %d" % [power, int(def["dmg"])]
+	if int(o["hits"]) > 1:
+		info += " • Нужно ударов: %d" % int(o["hits"])
+	var res: Dictionary = await hud.battle(p.name, def["name"], info, "Чтобы победить, нужно набрать %d или больше" % power, false)
+	var win: bool = int(res["total"]) >= power
+	var txt := ""
+	if win:
+		txt = "Победа! %d против силы %d." % [int(res["total"]), power]
+	else:
+		var dmg0 := int(def["dmg"]) + (1 if p.now_vuln or p.vuln > 0 else 0)
+		txt = "Поражение... %d против силы %d. −%d HP" % [int(res["total"]), power, dmg0]
+	await hud.battle_finish(txt, win)
+	_end_fight()
 	if win:
 		o["hits"] -= 1
 		if o["hits"] > 0:
@@ -1155,6 +1285,7 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 		_remove_object(tile)
 		if o.get("shard", false):
 			p.shards += 1
+			Settings.play("shard")
 			_float_text(p.node, "+1 осколок", Style.TEAL)
 			hud.toast("%s повержен и оставил осколок! У тебя %d из 3." % [def["name"], p.shards], Style.TEAL, 3.0)
 			_update_shrine_sockets()
@@ -1167,18 +1298,20 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 		hud.toast("%s оказался сильнее: −%d HP" % [def["name"], dmg], Style.RED, 3.0)
 
 func _duel(p: Dictionary, q: Dictionary) -> void:
-	var a := rng.randi_range(1, 6)
-	var d := rng.randi_range(1, 6)
-	var bonus := ""
-	if map.get_t(q.pos) == MapGen.FOREST:
-		d += 1
-		bonus = " (+1 за лес)"
-	var res := "Ничья"
+	_stop_walk(p)
+	_face_node(q.node, p.node.position)
+	_begin_fight(p.node, q.node)
+	var forest: bool = map.get_t(q.pos) == MapGen.FOREST
+	var r: Dictionary = await hud.battle(p.name, q.name, "Соперник бросит кубик сам" + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true)
+	var a := int(r["total"])
+	var d := rng.randi_range(1, 6) + (1 if forest else 0)
+	var res := "Ничья: %d против %d. Оба −1 HP" % [a, d]
 	if a > d:
-		res = "%s побеждает!" % p.name
+		res = "%s побеждает: %d против %d!" % [p.name, a, d]
 	elif d > a:
-		res = "%s отбивается!" % q.name
-	await hud.show_duel(p.name, a, q.name + bonus, d, a > d, res, true)
+		res = "%s отбивается: %d против %d. −2 HP" % [q.name, d, a]
+	await hud.battle_finish(res, a > d)
+	_end_fight()
 	if a > d:
 		var dmg := 2 + (1 if q.vuln > 0 else 0)
 		_damage(q, dmg)
@@ -1202,6 +1335,88 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 		_damage(p, 1)
 		_damage(q, 1)
 		q.reports.append("%s напал(а) — ничья, оба −1 HP." % p.name)
+
+func _stop_walk(p: Dictionary) -> void:
+	p.node.set("walking", false)
+
+func _face_node(n: Node3D, target: Vector3) -> void:
+	var d := target - n.position
+	if Vector2(d.x, d.z).length() > 0.01:
+		n.rotation.y = atan2(d.x, d.z)
+
+# --- анимация схватки
+var _fight_a: Node3D
+var _fight_b: Node3D
+var _fight_cam := 8.5
+
+func _begin_fight(a: Node3D, b: Node3D) -> void:
+	_fight_a = a
+	_fight_b = b
+	_fight_cam = cam_dist
+	_in_fight = true
+	a.visible = true
+	a.set("posing", true)
+	follow = null
+	var fwd := -cam.global_basis.z
+	fwd.y = 0
+	cam_goal = (a.position + b.position) * 0.5 - fwd.normalized() * 1.6
+	cam_dist = 5.0
+
+func _end_fight() -> void:
+	cam_dist = _fight_cam
+	if _fight_a:
+		_fight_a.set("posing", false)
+		var al: Node3D = _fight_a.get_node_or_null("Body/ArmL")
+		var ar: Node3D = _fight_a.get_node_or_null("Body/ArmR")
+		if al:
+			al.rotation = Vector3.ZERO
+		if ar:
+			ar.rotation = Vector3.ZERO
+	follow = players[cur].node
+	_in_fight = false
+	refresh_view()
+	_fight_a = null
+	_fight_b = null
+
+func _on_battle_event(kind: String) -> void:
+	if _fight_a == null or _fight_b == null:
+		return
+	var a := _fight_a
+	var b := _fight_b
+	match kind:
+		"enemy_attack":
+			var home := b.position
+			var tw := create_tween()
+			tw.tween_property(b, "position", home.lerp(a.position, 0.35), 1.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			tw.tween_property(b, "position", home, 0.35)
+		"block":
+			Settings.play("block")
+			var arm: Node3D = a.get_node_or_null("Body/ArmL")
+			if arm:
+				var tw2 := create_tween()
+				tw2.tween_property(arm, "rotation", Vector3(-1.4, 0, -0.6), 0.1)
+				tw2.tween_interval(0.4)
+				tw2.tween_property(arm, "rotation", Vector3.ZERO, 0.2)
+			_float_text(a, "Блок!", Style.GREEN)
+		"hit":
+			Settings.play("hit")
+			var home2 := a.position
+			var back := home2 + (home2 - b.position).normalized() * 0.15
+			var tw3 := create_tween()
+			tw3.tween_property(a, "position", back, 0.08)
+			tw3.tween_property(a, "position", home2, 0.2)
+			_float_text(a, "Ай!", Style.RED)
+		"hero_attack":
+			Settings.play("hit", 0.15)
+			var arm2: Node3D = a.get_node_or_null("Body/ArmR")
+			var home3 := a.position
+			var tw4 := create_tween()
+			tw4.tween_property(a, "position", home3.lerp(b.position, 0.3), 0.15)
+			if arm2:
+				tw4.parallel().tween_property(arm2, "rotation", Vector3(-2.4, 0, 0), 0.15)
+			tw4.tween_property(a, "position", home3, 0.25)
+			if arm2:
+				tw4.parallel().tween_property(arm2, "rotation", Vector3.ZERO, 0.25)
 
 func _damage(p: Dictionary, n: int) -> void:
 	p.hp = maxi(0, p.hp - n)
@@ -1227,6 +1442,7 @@ func _float_text(node: Node3D, txt: String, col: Color) -> void:
 	tw.tween_callback(l.queue_free)
 
 func _respawn(p: Dictionary) -> void:
+	_stop_walk(p)
 	await hud.alert("%s без сил..." % p.name, "Герой очнётся у последнего костра с 12 HP. Потерян один осколок и одна карта.", Style.RED)
 	if p.shards > 0:
 		p.shards -= 1

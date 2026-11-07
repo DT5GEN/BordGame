@@ -11,7 +11,10 @@ signal focus_requested
 signal cancel_mode
 signal menu_requested
 signal restart_requested
+signal settings_requested
+signal view_toggle_requested
 signal _alert_closed
+signal battle_event(kind: String)
 
 var game
 var phase := "wait"
@@ -44,7 +47,10 @@ var overlay_pass: ColorRect
 var popup: PanelContainer
 var popup_box: VBoxContainer
 var alert_panel: PanelContainer
+var modal: ColorRect
+var alert_closable := false
 var banner: VBoxContainer
+var view_btn: Button
 
 func _ready() -> void:
 	layer = 5
@@ -93,6 +99,11 @@ func _ready() -> void:
 	popup = PanelContainer.new()
 	popup.visible = false
 	root.add_child(popup)
+	modal = ColorRect.new()
+	modal.set_anchors_preset(Control.PRESET_FULL_RECT)
+	modal.visible = false
+	modal.gui_input.connect(_on_modal_input)
+	root.add_child(modal)
 	alert_panel = PanelContainer.new()
 	alert_panel.visible = false
 	root.add_child(alert_panel)
@@ -146,15 +157,26 @@ func _build_top() -> void:
 	time_lbl = Style.label("", 22, Style.PARCH, Style.font_bold)
 	time_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tp.add_child(time_lbl)
+	var rcol := VBoxContainer.new()
+	rcol.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	rcol.position = Vector2(-372, 12)
+	rcol.custom_minimum_size = Vector2(360, 0)
+	root.add_child(rcol)
 	var right := HBoxContainer.new()
-	right.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	right.position = Vector2(-330, 12)
-	right.custom_minimum_size = Vector2(318, 0)
 	right.alignment = BoxContainer.ALIGNMENT_END
-	root.add_child(right)
-	var fb := Style.button("К герою", 20)
+	rcol.add_child(right)
+	var right2 := HBoxContainer.new()
+	right2.alignment = BoxContainer.ALIGNMENT_END
+	rcol.add_child(right2)
+	view_btn = Style.button("Вид: 3-е лицо", 18)
+	view_btn.pressed.connect(func(): view_toggle_requested.emit())
+	right2.add_child(view_btn)
+	var fb := Style.button("К герою", 18)
 	fb.pressed.connect(func(): focus_requested.emit())
-	right.add_child(fb)
+	right2.add_child(fb)
+	var sbtn := Style.button("Настройки", 20)
+	sbtn.pressed.connect(func(): settings_requested.emit())
+	right.add_child(sbtn)
 	var hb := Style.button("?", 28, 56)
 	hb.add_theme_font_override("font", Style.font_title)
 	hb.tooltip_text = "Свиток с правилами"
@@ -276,6 +298,7 @@ func refresh() -> void:
 	var w: String = game.weather
 	time_lbl.text = "Раунд %d  •  %s  %s  •  %s" % [game.round_no, game.clock_text(), game.time_name(), w]
 	steps_lbl.text = "Шагов: %d" % game.steps_left
+	view_btn.text = "Вид: 1-е лицо" if game.view_first else "Вид: 3-е лицо"
 	trap_btn.text = "Ловушки (%d)" % p.hand.size()
 	bag_btn.text = "Сумка (%d)" % p.items.size()
 
@@ -297,6 +320,8 @@ func toast(text: String, col: Color = Style.PARCH, dur: float = 3.0) -> void:
 	tw.tween_callback(pc.queue_free)
 
 func big_banner(title: String, sub: String) -> void:
+	if title.contains("ночь"):
+		Settings.play("night", 0.0)
 	for c in banner.get_children():
 		c.queue_free()
 	var t := Style.outlined(Style.label(title, 84, Style.GOLD, Style.font_title), 16)
@@ -317,6 +342,7 @@ func animate_roll(die: String, face: int, steps: int, note: String) -> void:
 	if fast:
 		await get_tree().process_frame
 		return
+	Settings.play("dice", 0.0)
 	roll_lbl.visible = true
 	roll_sub.visible = false
 	var faces: Array = DB.die_faces(die)
@@ -335,102 +361,220 @@ func animate_roll(die: String, face: int, steps: int, note: String) -> void:
 	roll_lbl.visible = false
 	roll_sub.visible = false
 
-func _place_center(pc: Control, w: float) -> void:
+func _place_center(pc: Control, w: float, bottom_px: float = -1.0) -> void:
 	pc.custom_minimum_size = Vector2(w, 0)
+	pc.size = Vector2(w, 0)
+	await get_tree().process_frame
 	pc.reset_size()
 	await get_tree().process_frame
 	var vs := root.get_viewport_rect().size
-	pc.position = (vs - pc.size) * 0.5
+	if pc.size.y > vs.y - 20:
+		pc.size.y = vs.y - 20
+	if bottom_px >= 0.0:
+		pc.position = Vector2((vs.x - pc.size.x) * 0.5, vs.y - pc.size.y - bottom_px)
+	else:
+		pc.position = (vs - pc.size) * 0.5
 
-func alert(title: String, text: String, col: Color = Style.GOLD) -> void:
-	for c in alert_panel.get_children():
-		c.queue_free()
-	alert_panel.add_theme_stylebox_override("panel", Style.sb(Color(0.1, 0.07, 0.05, 0.96), col, 3, 18, 22))
-	var v := VBoxContainer.new()
-	alert_panel.add_child(v)
-	var t := Style.label(title, 38, col, Style.font_title)
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	v.add_child(t)
-	var l := Style.label(text, 24, Style.PARCH)
+func _wrap_label(text: String, size: int, col: Color, w: float, font: Font = null) -> Label:
+	var l := Style.label(text, size, col, font)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	v.add_child(l)
-	var b := Style.button("Понятно", 24)
-	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	b.pressed.connect(func(): _alert_closed.emit())
-	v.add_child(b)
-	alert_panel.visible = true
-	alert_panel.modulate.a = 0.0
-	_place_center(alert_panel, 620)
+	l.custom_minimum_size.x = w
+	return l
+
+func _show_modal(dim: float) -> void:
+	modal.color = Color(0, 0, 0, dim)
+	modal.visible = true
+	modal.move_to_front()
+	alert_panel.move_to_front()
+
+func _hide_modal() -> void:
+	modal.visible = false
+	alert_closable = false
+
+func _on_modal_input(e: InputEvent) -> void:
+	if e is InputEventMouseButton and e.pressed and alert_closable:
+		_alert_closed.emit()
+
+func _unhandled_input(e: InputEvent) -> void:
+	if e.is_action_pressed("ui_cancel"):
+		if popup.visible:
+			_close_popup()
+			get_viewport().set_input_as_handled()
+		elif alert_panel.visible and alert_closable:
+			_alert_closed.emit()
+			get_viewport().set_input_as_handled()
+
+## Окно-сообщение. Закрывается кнопкой, тапом мимо окна или Esc.
+func alert(title: String, text: String, col: Color = Style.GOLD) -> void:
 	if fast:
 		print("ALERT: ", title, " | ", text.replace("\n", " / "))
 		await get_tree().process_frame
-		alert_panel.visible = false
 		return
+	for c in alert_panel.get_children():
+		c.free()
+	alert_panel.add_theme_stylebox_override("panel", Style.sb(Color(0.1, 0.07, 0.05, 0.96), col, 3, 18, 22))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	alert_panel.add_child(v)
+	v.add_child(_wrap_label(title, 38, col, 560, Style.font_title))
+	v.add_child(_wrap_label(text, 24, Style.PARCH, 560))
+	var b := Style.button("Понятно", 26, 200)
+	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	b.pressed.connect(func(): _alert_closed.emit())
+	v.add_child(b)
+	alert_panel.modulate.a = 0.0
+	alert_panel.visible = true
+	_show_modal(0.35)
+	await _place_center(alert_panel, 620)
+	alert_closable = true
 	var tw := create_tween()
 	tw.tween_property(alert_panel, "modulate:a", 1.0, 0.2)
 	await _alert_closed
 	alert_panel.visible = false
+	_hide_modal()
 
-func show_duel(a_name: String, a_roll: int, b_name: String, b_val: int, win: bool, result: String, pvp := false) -> void:
+# ------------------------------------------------------------ интерактивный бой
+class QTE extends Control:
+	## Кольцо сжимается к кругу. Нажми, когда они совпадут, — блок щитом.
+	signal done(ok: bool)
+	const R0 := 44.0
+	const TOL := 15.0
+	var t := 0.0
+	var dur := 1.4
+	var finished := false
+	var ok := false
+
+	func _ready() -> void:
+		custom_minimum_size = Vector2(200, 200)
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		dur = randf_range(1.15, 1.6)
+
+	func ring_r() -> float:
+		return lerpf(R0 * 3.3, 0.0, t / dur)
+
+	func _process(delta: float) -> void:
+		if finished:
+			return
+		t += delta
+		queue_redraw()
+		if ring_r() < R0 - TOL - 2.0:
+			_finish(false)
+
+	func _gui_input(e: InputEvent) -> void:
+		if finished:
+			return
+		if (e is InputEventMouseButton and e.pressed) or (e is InputEventScreenTouch and e.pressed):
+			_finish(absf(ring_r() - R0) <= TOL)
+			accept_event()
+
+	func press() -> void:
+		if not finished:
+			_finish(absf(ring_r() - R0) <= TOL)
+
+	func _finish(v: bool) -> void:
+		finished = true
+		ok = v
+		queue_redraw()
+		done.emit(v)
+
+	func _draw() -> void:
+		var c := size * 0.5
+		draw_circle(c, R0 + TOL, Color(0.9, 0.75, 0.3, 0.12))
+		draw_arc(c, R0, 0, TAU, 64, Color("e8c36a"), 5.0, true)
+		# деревянный щит в центре
+		draw_circle(c, R0 - 10, Color("8a5a2b"))
+		draw_arc(c, R0 - 10, 0, TAU, 48, Color("5a3a1a"), 4.0, true)
+		draw_line(c + Vector2(0, -(R0 - 12)), c + Vector2(0, R0 - 12), Color("6b4520"), 3.0)
+		draw_circle(c, 7, Color("c9c9c9"))
+		if not finished:
+			var rr := ring_r()
+			var near := absf(rr - R0) <= TOL
+			draw_arc(c, rr, 0, TAU, 64, Color("6fd07a") if near else Color("ff6a5a"), 6.0, true)
+		else:
+			draw_arc(c, R0 + 8, 0, TAU, 64, Color("6fd07a") if ok else Color("ff6a5a"), 10.0, true)
+
+## Бой в 2 шага: защита (кольцо) → свой бросок кубика. Возвращает {blocked, bonus, roll, total}.
+func battle(hero_name: String, foe_name: String, foe_info: String, need_text: String, pvp: bool) -> Dictionary:
+	if fast:
+		var bl := randf() < 0.5
+		var r := randi_range(1, 6)
+		var bn := 2 if bl else -1
+		await get_tree().process_frame
+		return {"blocked": bl, "bonus": bn, "roll": r, "total": maxi(1, r + bn)}
 	for c in alert_panel.get_children():
-		c.queue_free()
-	alert_panel.add_theme_stylebox_override("panel", Style.sb(Color(0.1, 0.07, 0.05, 0.96), Style.RED, 3, 18, 22))
+		c.free()
+	alert_panel.add_theme_stylebox_override("panel", Style.sb(Color(0.1, 0.07, 0.05, 0.94), Style.RED, 3, 18, 18))
 	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
 	alert_panel.add_child(v)
-	var t := Style.label("Схватка!", 44, Style.RED, Style.font_title)
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(t)
-	var h := HBoxContainer.new()
-	h.alignment = BoxContainer.ALIGNMENT_CENTER
-	h.add_theme_constant_override("separation", 40)
-	v.add_child(h)
-	var a_box := VBoxContainer.new()
-	h.add_child(a_box)
-	a_box.add_child(Style.label(a_name, 24, Style.PARCH, Style.font_bold))
-	var a_num := Style.label("?", 80, Style.GOLD, Style.font_title)
-	a_num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	a_box.add_child(a_num)
-	h.add_child(Style.label("против", 24, Color(Style.PARCH, 0.6)))
-	var b_box := VBoxContainer.new()
-	h.add_child(b_box)
-	b_box.add_child(Style.label(b_name, 24, Style.PARCH, Style.font_bold))
-	var b_num := Style.label("?" if pvp else str(b_val), 80, Style.RED, Style.font_title)
-	b_num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b_box.add_child(b_num)
-	var res := Style.label(" ", 26, Style.PARCH, Style.font_bold)
-	res.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	res.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	v.add_child(res)
-	var b := Style.button("Дальше", 24)
+	v.add_child(_wrap_label("%s  против  %s" % [hero_name, foe_name], 34, Style.RED, 700, Style.font_title))
+	if foe_info != "":
+		v.add_child(_wrap_label(foe_info, 20, Color(Style.PARCH, 0.75), 700))
+	var hint := _wrap_label("%s атакует! Нажми на щит, когда кольцо станет зелёным" % foe_name, 24, Style.GOLD, 700, Style.font_bold)
+	v.add_child(hint)
+	var center := CenterContainer.new()
+	v.add_child(center)
+	var qte := QTE.new()
+	center.add_child(qte)
+	alert_panel.visible = true
+	alert_panel.modulate.a = 1.0
+	_show_modal(0.0)
+	await _place_center(alert_panel, 740, 16)
+	await get_tree().create_timer(0.7).timeout
+	battle_event.emit("enemy_attack")
+	qte.set_process(true)
+	var blocked: bool = await qte.done
+	battle_event.emit("block" if blocked else "hit")
+	var bonus := 2 if blocked else -1
+	hint.text = ("Блок! Следующий бросок +2" if blocked else "Не успел... Следующий бросок −1")
+	hint.add_theme_color_override("font_color", Style.GREEN if blocked else Style.RED)
+	await get_tree().create_timer(0.9).timeout
+	center.queue_free()
+	var num := Style.label("?", 96, Style.GOLD, Style.font_title)
+	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(num)
+	v.add_child(_wrap_label(need_text, 21, Color(Style.PARCH, 0.85), 700))
+	var rb := Style.button("Бросить кубик!", 30, 300)
+	rb.add_theme_font_override("font", Style.font_title)
+	rb.add_theme_stylebox_override("normal", Style.sb(Color("8a3b1f"), Style.GOLD, 3, 14, 12))
+	rb.add_theme_stylebox_override("hover", Style.sb(Color("a84a28"), Color.WHITE, 3, 14, 12))
+	rb.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var pressed := [false]
+	rb.pressed.connect(func(): pressed[0] = true)
+	v.add_child(rb)
+	await _place_center(alert_panel, 740, 16)
+	while not pressed[0]:
+		await get_tree().process_frame
+	rb.disabled = true
+	Settings.play("dice", 0.0)
+	for i in 12:
+		num.text = str(randi_range(1, 6))
+		await get_tree().create_timer(0.05 + i * 0.006).timeout
+	var roll := randi_range(1, 6)
+	var total := maxi(1, roll + bonus)
+	num.text = "%d %s %d = %d" % [roll, "+" if bonus >= 0 else "−", absi(bonus), total]
+	battle_event.emit("hero_attack")
+	rb.queue_free()
+	await get_tree().create_timer(0.6).timeout
+	return {"blocked": blocked, "bonus": bonus, "roll": roll, "total": total}
+
+func battle_finish(result: String, win: bool) -> void:
+	if fast:
+		print("BATTLE: ", result)
+		await get_tree().process_frame
+		return
+	var v: VBoxContainer = alert_panel.get_child(0)
+	v.add_child(_wrap_label(result, 26, Style.GREEN if win else Style.RED, 700, Style.font_bold))
+	var b := Style.button("Дальше", 26, 200)
 	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	b.disabled = true
 	b.pressed.connect(func(): _alert_closed.emit())
 	v.add_child(b)
-	alert_panel.visible = true
-	_place_center(alert_panel, 640)
-	if fast:
-		print("DUEL: %s %d vs %s %d -> %s" % [a_name, a_roll, b_name, b_val, result])
-		await get_tree().process_frame
-		alert_panel.visible = false
-		return
-	for i in 10:
-		a_num.text = str(randi_range(1, 6))
-		if pvp:
-			b_num.text = str(randi_range(1, 6))
-		await get_tree().create_timer(0.06).timeout
-	a_num.text = str(a_roll)
-	b_num.text = str(b_val)
-	if pvp:
-		res.text = result
-		res.add_theme_color_override("font_color", Style.GREEN if win else Style.RED)
-	else:
-		res.text = ("Победа! " if win else "Поражение... ") + result
-		res.add_theme_color_override("font_color", Style.GREEN if win else Style.RED)
-	b.disabled = false
+	await _place_center(alert_panel, 740, 16)
+	alert_closable = true
 	await _alert_closed
 	alert_panel.visible = false
+	_hide_modal()
 
 # ------------------------------------------------------------ передача телефона
 func show_pass(p: Dictionary, reports: Array) -> void:
@@ -501,6 +645,7 @@ func _open_popup(title: String) -> VBoxContainer:
 	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sc.add_child(list)
 	popup.visible = true
+	popup.move_to_front()
 	_place_center(popup, 680)
 	return list
 
@@ -584,6 +729,7 @@ func show_victory(p: Dictionary) -> void:
 	var b2 := Style.button("В меню", 28, 200)
 	b2.pressed.connect(func(): menu_requested.emit())
 	h.add_child(b2)
+	Settings.play("victory", 0.0)
 	var conf := CPUParticles2D.new()
 	conf.position = Vector2(root.get_viewport_rect().size.x * 0.5, -20)
 	conf.amount = 160

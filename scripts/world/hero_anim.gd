@@ -2,6 +2,7 @@ extends Node3D
 ## Анимация героя: дыхание на месте и шаг при ходьбе.
 
 var walking := false
+var posing := false
 var _t := 0.0
 var _body: Node3D
 var _legs: Array = []
@@ -22,6 +23,8 @@ func _process(delta: float) -> void:
 		_legs[1].rotation.x = -s * 0.7
 		_arms[0].rotation.x = -s * 0.6
 		_arms[1].rotation.x = s * 0.6
+	elif posing:
+		_body.position.y = sin(_t * 4.0) * 0.015
 	else:
 		_body.position.y = sin(_t * 2.4) * 0.012
 		for l in _legs:
