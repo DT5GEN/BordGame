@@ -13,6 +13,7 @@ static func tile_color(tt: int, x: int, z: int, rng: RandomNumberGenerator) -> C
 		M.GRASS: c = Color(0.45, 0.72, 0.32)
 		M.FOREST: c = Color(0.30, 0.52, 0.24)
 		M.HILL: c = Color(0.58, 0.76, 0.38)
+		M.HILL2: c = Color(0.68, 0.82, 0.44)
 		M.SAND: c = Color(0.88, 0.80, 0.58)
 		M.WATER: c = Color(0.20, 0.30, 0.30)
 		M.BRIDGE: c = Color(0.20, 0.30, 0.30)
@@ -151,7 +152,7 @@ static func _trees(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 				n = 2 if rng.randf() < 0.7 else 3
 			elif tt == M.GRASS and rng.randf() < 0.03 and z > 3:
 				n = 1
-			elif tt == M.HILL and rng.randf() < 0.06:
+			elif (tt == M.HILL or tt == M.HILL2) and rng.randf() < 0.06:
 				n = 1
 			if busy.has(p):
 				n = 0
@@ -195,7 +196,7 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 			var p := Vector2i(x, z)
 			var tt: int = map.get_t(p)
 			var y: float = map.height(p)
-			if tt == M.GRASS or tt == M.HILL:
+			if tt == M.GRASS or tt == M.HILL or tt == M.HILL2:
 				if rng.randf() < 0.35:
 					var c: Color = fcols[rng.randi() % fcols.size()]
 					for k in rng.randi_range(1, 3):

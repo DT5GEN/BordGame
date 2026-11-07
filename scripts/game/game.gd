@@ -587,8 +587,11 @@ func _tile_hint(t: Vector2i) -> void:
 		return
 	var txt: String = MapGen.NAMES[tt]
 	var c: int = map.cost(t)
+	var lv: int = map.level(t)
 	if c < 50:
 		txt += " — шаг стоит %d" % c
+		if lv > 0:
+			txt += ", подняться сюда +1 за этаж (с холма видно на %d дальше)" % lv
 	else:
 		txt += " — не пройти"
 	var o = objects.get(t)
@@ -890,6 +893,8 @@ func vision(p: Dictionary) -> int:
 	var r := 3
 	if tt == MapGen.HILL:
 		r = 4
+	elif tt == MapGen.HILL2:
+		r = 5
 	elif tt == MapGen.FOREST:
 		r = 2
 	if night:
@@ -1073,7 +1078,10 @@ func _recalc() -> void:
 			var n: Vector2i = c + d
 			if not map.passable(n):
 				continue
-			var nd: int = dist[c] + map.cost(n)
+			var step_c: int = map.move_cost(c, n)
+			if step_c >= 50:
+				continue
+			var nd: int = dist[c] + step_c
 			if nd > steps_left:
 				continue
 			if dist.has(n) and dist[n] <= nd:
@@ -1168,7 +1176,7 @@ func _walk(path: Array) -> void:
 	follow = p.node
 	for step in path:
 		var tile: Vector2i = step
-		var c: int = map.cost(tile)
+		var c: int = map.move_cost(p.pos, tile)
 		var o = objects.get(tile)
 		if o != null and o["type"] in ["chest", "event"]:
 			# к сундукам и камням подходим вплотную, а не наступаем на них
@@ -1953,7 +1961,7 @@ func _unit_move(u: Dictionary, target: Vector2i, max_steps: int, stop_d: int, aw
 		var bd := d0
 		for dd in DIRS:
 			var nt: Vector2i = u["pos"] + dd
-			if not _tile_free_for_unit(nt):
+			if not _tile_free_for_unit(nt) or map.move_cost(u["pos"], nt) >= 50:
 				continue
 			var nd := _cheb(nt, target)
 			if (not away and nd < bd) or (away and nd > bd):
@@ -2137,7 +2145,7 @@ func _on_long_press(sp: Vector2) -> void:
 		hud.toast("Подойди к зверю вплотную, чтобы приручить или атаковать.", Style.GOLD, 2.5)
 		return
 	var opts: Array = []
-	var cost: int = map.cost(t)
+	var cost: int = map.move_cost(p.pos, t)
 	opts.append(["Атаковать (%d шаг.)" % cost, rolled and steps_left >= cost])
 	var tame_txt := "Этого зверя не приручить"
 	var can_tame := false

@@ -1,10 +1,10 @@
 extends RefCounted
 ## Карта долины: клетки, высоты, объекты. Север (z = 0) — старт, юг — Святилище.
 
-enum { GRASS, FOREST, HILL, SAND, WATER, BRIDGE, ROCK, SHRINE, PATH }
+enum { GRASS, FOREST, HILL, SAND, WATER, BRIDGE, ROCK, SHRINE, PATH, HILL2 }
 
-const COST := {GRASS: 1, FOREST: 2, HILL: 2, SAND: 1, WATER: 99, BRIDGE: 1, ROCK: 99, SHRINE: 1, PATH: 1}
-const NAMES := {GRASS: "Равнина", FOREST: "Лес", HILL: "Холм", SAND: "Берег", WATER: "Река",
+const COST := {GRASS: 1, FOREST: 2, HILL: 1, SAND: 1, WATER: 99, BRIDGE: 1, ROCK: 99, SHRINE: 1, PATH: 1, HILL2: 1}
+const NAMES := {GRASS: "Равнина", FOREST: "Лес", HILL: "Холм", HILL2: "Высокий холм", SAND: "Берег", WATER: "Река",
 	BRIDGE: "Мост", ROCK: "Скалы", SHRINE: "Ворота в горе", PATH: "Горная тропа"}
 
 var w := 0
@@ -36,6 +36,23 @@ func cost(p: Vector2i) -> int:
 
 func passable(p: Vector2i) -> bool:
 	return inb(p) and cost(p) < 50
+
+## Этаж клетки: равнина 0, холм 1, высокий холм 2.
+func level(p: Vector2i) -> int:
+	match get_t(p):
+		HILL: return 1
+		HILL2: return 2
+	return 0
+
+## Цена шага с клетки a на соседнюю b. Подъём на этаж +1, по холму и вниз — как обычно.
+## Сразу на два этажа (обрыв) не забраться и не спрыгнуть.
+func move_cost(a: Vector2i, b: Vector2i) -> int:
+	if not passable(b):
+		return 99
+	var dl := level(b) - level(a) if inb(a) else 0
+	if absi(dl) > 1:
+		return 99
+	return cost(b) + maxi(0, dl)
 
 func height(p: Vector2i) -> float:
 	if not inb(p):
@@ -86,6 +103,7 @@ func generate(width: int, height_: int, seed_: int, n_players: int) -> void:
 	shrine = Vector2i(w / 2, h - 2)
 	set_t(shrine, SHRINE)
 	_ensure_path()
+	_high_hills(nh)
 	_heights()
 	_place_objects(n_players)
 
@@ -190,6 +208,25 @@ func _ensure_path() -> void:
 		if not passable(p):
 			set_t(p, BRIDGE if get_t(p) == WATER else PATH)
 
+## Вершины больших холмов становятся «вторым этажом». Вокруг всегда обычный холм,
+## поэтому подняться можно только по ступенькам.
+func _high_hills(nh: FastNoiseLite) -> void:
+	var up: Array = []
+	for z in range(1, h - 1):
+		for x in range(1, w - 1):
+			var p := Vector2i(x, z)
+			if get_t(p) != HILL or nh.get_noise_2d(x, z) < 0.42:
+				continue
+			var ok := true
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if get_t(p + Vector2i(dx, dz)) != HILL:
+						ok = false
+			if ok:
+				up.append(p)
+	for p in up:
+		set_t(p, HILL2)
+
 func _heights() -> void:
 	for z in h:
 		for x in w:
@@ -197,6 +234,7 @@ func _heights() -> void:
 			var y := 0.0
 			match tt:
 				HILL: y = 0.45
+				HILL2: y = 0.9
 				SAND: y = -0.07
 				WATER: y = -0.6
 				BRIDGE: y = 0.04
@@ -252,7 +290,7 @@ func _find_camp(near: Vector2i) -> Vector2i:
 				var ok := true
 				for d in CAMP_TILES:
 					var q: Vector2i = p + d
-					if not inb(q) or not _free(q, false) or get_t(q) == HILL:
+					if not inb(q) or not _free(q, false) or get_t(q) == HILL or get_t(q) == HILL2:
 						ok = false
 						break
 				if ok:
