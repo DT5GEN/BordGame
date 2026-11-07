@@ -7,6 +7,7 @@ signal intro_requested
 const Models = preload("res://scripts/world/models.gd")
 const Papyrus = preload("res://scripts/ui/papyrus.gd")
 const SettingsPanel = preload("res://scripts/ui/settings_panel.gd")
+const CardEditor = preload("res://scripts/menu/card_editor.gd")
 
 const SIZES := [
 	["Малая", Vector2i(18, 38), "≈10 мин"],
@@ -31,6 +32,7 @@ var preview_name: Label
 var preview_title: Label
 var papyrus
 var settings_panel
+var card_editor
 
 func _ready() -> void:
 	theme = Style.theme
@@ -55,6 +57,8 @@ func _ready() -> void:
 	add_child(papyrus)
 	settings_panel = SettingsPanel.new()
 	add_child(settings_panel)
+	card_editor = CardEditor.new()
+	add_child(card_editor)
 	_refresh()
 
 func _build() -> void:
@@ -199,19 +203,22 @@ void fragment() {
 	v.add_child(rules_cb)
 	var bh := HBoxContainer.new()
 	v.add_child(bh)
-	var go := Style.button("В путь!", 36, 260)
+	var go := Style.button("В путь!", 34, 210)
 	go.add_theme_font_override("font", Style.font_title)
 	go.add_theme_stylebox_override("normal", Style.sb(Color("8a3b1f"), Style.GOLD, 3, 16, 12))
 	go.add_theme_stylebox_override("hover", Style.sb(Color("a84a28"), Color.WHITE, 3, 16, 12))
 	go.pressed.connect(_start)
 	bh.add_child(go)
-	var rb := Style.button("Свиток правил", 22)
+	var rb := Style.button("Правила", 19)
 	rb.pressed.connect(func(): papyrus.open())
 	bh.add_child(rb)
-	var ib := Style.button("История", 22)
+	var ib := Style.button("История", 19)
 	ib.pressed.connect(func(): intro_requested.emit())
 	bh.add_child(ib)
-	var sbn := Style.button("Настройки", 22)
+	var eb := Style.button("Редактор карт", 19)
+	eb.pressed.connect(func(): card_editor.open())
+	bh.add_child(eb)
+	var sbn := Style.button("Настройки", 19)
 	sbn.pressed.connect(func(): settings_panel.open())
 	bh.add_child(sbn)
 

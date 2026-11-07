@@ -17,8 +17,34 @@ func _ready() -> void:
 	elif "--musictest" in OS.get_cmdline_user_args():
 		await _wait(0.5)
 		print("PLAYLIST ", Settings.playlist.size(), " now=", Settings.current_track, " playing=", Settings.music.playing)
+		print("VOICE intro=", Settings.voice_timing("intro").get("starts", []), " finale_len=", Settings.play_voice("finale"), " traps=", DB.traps.size(), " beasts=", DB.beasts.keys())
 		for t in Settings.playlist:
 			print("  ", t["name"])
+		get_tree().quit()
+	elif "--editortest" in OS.get_cmdline_user_args():
+		show_menu()
+		await _wait(1.0)
+		await _shot("ed_menu")
+		current.card_editor.open()
+		DB.set_fx(0, "dmg", 4)
+		current.card_editor._rebuild()
+		await _wait(0.8)
+		await _shot("ed_trap")
+		print("EDIT: trap0 dmg=", DB.traps[0]["fx"]["dmg"], " cost=", DB.trap_price(0), " text=", DB.traps[0]["text"])
+		DB.set_fx(0, "dmg", 99)
+		print("CLAMP: dmg=", DB.traps[0]["fx"]["dmg"])
+		current.card_editor.sel_kind = "beast"
+		current.card_editor.sel_beast = "bear"
+		DB.set_beast("bear", "power", 1)
+		current.card_editor._rebuild()
+		await _wait(0.8)
+		await _shot("ed_beast")
+		print("BEAST: bear power=", DB.beasts["bear"]["power"])
+		DB.load_cards()
+		print("RELOAD: trap0 dmg=", DB.traps[0]["fx"]["dmg"], " cost=", DB.trap_price(0), " bear=", DB.beasts["bear"]["power"])
+		DB.reset_all()
+		DB.load_cards()
+		print("RESET: trap0 dmg=", DB.traps[0]["fx"]["dmg"], " cost=", DB.trap_price(0), " text=", DB.traps[0]["text"])
 		get_tree().quit()
 	elif "--herotest" in OS.get_cmdline_user_args():
 		show_menu()
