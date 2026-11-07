@@ -165,6 +165,28 @@ func next_track() -> void:
 	current_track = t["name"]
 	track_changed.emit(current_track)
 
+# ------------------------------------------------------------ озвучка
+var voice: AudioStreamPlayer
+
+## Играет voice/<name>.ogg|mp3|wav, если файл есть. Возвращает длину в секундах (0 — нет файла).
+func play_voice(name: String) -> float:
+	if voice == null:
+		voice = AudioStreamPlayer.new()
+		voice.bus = "SFX"
+		add_child(voice)
+	for ext in EXTS:
+		var path := "res://voice/%s.%s" % [name, ext]
+		var st := _load_stream({"path": path, "external": false})
+		if st != null:
+			voice.stream = st
+			voice.play()
+			return st.get_length()
+	return 0.0
+
+func stop_voice() -> void:
+	if voice:
+		voice.stop()
+
 # ------------------------------------------------------------ звуки
 func play(name: String, pitch_jitter := 0.06) -> void:
 	if not sfx.has(name):

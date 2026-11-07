@@ -60,13 +60,15 @@
   "beasts": {
     "wolf":     {"name": "Серый волк",     "power": 4, "dmg": 2, "hits": 1},
     "boar":     {"name": "Дикий кабан",    "power": 3, "dmg": 2, "hits": 1},
-    "guardian": {"name": "Каменный страж", "power": 4, "dmg": 3, "hits": 2}
+    "guardian": {"name": "Каменный страж", "power": 4, "dmg": 3, "hits": 2},
+    "bear":     {"name": "Бурый медведь",  "power": 5, "dmg": 3, "hits": 2}
   },
 
   "items": {
     "potion": {"name": "Зелье лечения", "text": "+6 HP", "use": true},
     "torch":  {"name": "Факел", "text": "+1 к обзору (особенно ночью)", "use": false},
     "boots":  {"name": "Сапоги-скороходы", "text": "+3 шага в этот ход", "use": true},
-    "honey":  {"name": "Банка мёда", "text": "Полное лечение", "use": true}
+    "honey":  {"name": "Банка мёда", "text": "Полное лечение. Медведи обожают мёд", "use": true},
+    "meat":   {"name": "Мясо", "text": "Еда для приручения волков", "use": false}
   }
 }

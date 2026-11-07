@@ -5,7 +5,7 @@ enum { GRASS, FOREST, HILL, SAND, WATER, BRIDGE, ROCK, SHRINE, PATH }
 
 const COST := {GRASS: 1, FOREST: 2, HILL: 2, SAND: 1, WATER: 99, BRIDGE: 1, ROCK: 99, SHRINE: 1, PATH: 1}
 const NAMES := {GRASS: "Равнина", FOREST: "Лес", HILL: "Холм", SAND: "Берег", WATER: "Река",
-	BRIDGE: "Мост", ROCK: "Скалы", SHRINE: "Святилище", PATH: "Горная тропа"}
+	BRIDGE: "Мост", ROCK: "Скалы", SHRINE: "Ворота в горе", PATH: "Горная тропа"}
 
 var w := 0
 var h := 0
@@ -310,6 +310,14 @@ func _place_objects(np: int) -> void:
 			if get_t(p) == FOREST and _free(p):
 				_take(p)
 				objects.append({"type": "beast", "pos": p, "kind": "wolf" if rng.randf() < 0.55 else "boar", "shard": false})
+				break
+	# Медведи — редкие и сильные
+	for i in maxi(1, int(w * h / 450.0)):
+		for attempt in 40:
+			var p := Vector2i(rng.randi_range(1, w - 2), rng.randi_range(int(h * 0.25), gorge.x - 2))
+			if get_t(p) == FOREST and _free(p):
+				_take(p)
+				objects.append({"type": "beast", "pos": p, "kind": "bear", "shard": false})
 				break
 	# Камни с вопросом — случайные события
 	for i in int(w * h / 230.0):

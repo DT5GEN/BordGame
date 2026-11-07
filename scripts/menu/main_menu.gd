@@ -2,6 +2,7 @@ extends Control
 ## Главное меню: число игроков 1–6, имена, выбор из 10 героев, питомец, размер карты.
 
 signal start_requested(cfg: Dictionary)
+signal intro_requested
 
 const Models = preload("res://scripts/world/models.gd")
 const Papyrus = preload("res://scripts/ui/papyrus.gd")
@@ -15,6 +16,9 @@ const SIZES := [
 
 var slots: Array = []
 var count := 2
+var team_mode := false
+var team_cb: CheckBox
+var team_info: Label
 var selected := 0
 var size_idx := 1
 var rows_box: VBoxContainer
@@ -33,15 +37,16 @@ func _ready() -> void:
 	size = get_viewport_rect().size
 	get_viewport().size_changed.connect(func(): size = get_viewport_rect().size)
 	var used := []
-	for i in 6:
+	for i in 10:
 		var h := (i * 3) % DB.heroes.size()
-		slots.append({"name": DB.heroes[h]["name"], "hero": h, "pet": false})
+		slots.append({"name": DB.heroes[h]["name"], "hero": h, "pet": false, "team": i % 2})
 	var lc: Dictionary = DB.last_config
 	if not lc.is_empty():
 		var lp: Array = lc["players"]
 		count = lp.size()
 		for i in lp.size():
-			slots[i] = {"name": lp[i]["name"], "hero": lp[i]["hero"], "pet": i == DB.last_winner_slot}
+			slots[i] = {"name": lp[i]["name"], "hero": lp[i]["hero"], "pet": i == DB.last_winner_slot, "team": int(lp[i].get("team", i % 2))}
+		team_mode = lc.get("team_mode", false)
 		for i in SIZES.size():
 			if SIZES[i][1] == lc["size"]:
 				size_idx = i
@@ -171,9 +176,22 @@ void fragment() {
 		b.pressed.connect(func(): _choose_size(i))
 		ch.add_child(b)
 		size_btns.append(b)
+	team_cb = CheckBox.new()
+	team_cb.text = "Командная игра: Красные против Синих"
+	team_cb.button_pressed = team_mode
+	team_cb.add_theme_font_size_override("font_size", 19)
+	team_cb.toggled.connect(func(on):
+		team_mode = on
+		_refresh())
+	v.add_child(team_cb)
+	var rs := ScrollContainer.new()
+	rs.custom_minimum_size = Vector2(0, 300)
+	rs.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	v.add_child(rs)
 	rows_box = VBoxContainer.new()
 	rows_box.add_theme_constant_override("separation", 6)
-	v.add_child(rows_box)
+	rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rs.add_child(rows_box)
 	rules_cb = CheckBox.new()
 	rules_cb.text = "Показать свиток с правилами в начале"
 	rules_cb.button_pressed = DB.last_config.is_empty()
@@ -190,12 +208,15 @@ void fragment() {
 	var rb := Style.button("Свиток правил", 22)
 	rb.pressed.connect(func(): papyrus.open())
 	bh.add_child(rb)
+	var ib := Style.button("История", 22)
+	ib.pressed.connect(func(): intro_requested.emit())
+	bh.add_child(ib)
 	var sbn := Style.button("Настройки", 22)
 	sbn.pressed.connect(func(): settings_panel.open())
 	bh.add_child(sbn)
 
 func _set_count(n: int) -> void:
-	count = clampi(n, 1, 6)
+	count = clampi(n, 1, 10)
 	selected = mini(selected, count - 1)
 	_refresh()
 
@@ -239,13 +260,24 @@ func _make_row(i: int) -> Control:
 	var l := Style.button("◀", 20, 40)
 	l.pressed.connect(func(): _cycle(i, -1))
 	h.add_child(l)
-	var hl := Style.label(DB.heroes[s["hero"]]["title"], 19, Style.PARCH)
-	hl.custom_minimum_size.x = 210
+	var hl := Style.label(DB.heroes[s["hero"]]["title"], 17, Style.PARCH)
+	hl.custom_minimum_size.x = 190
+	hl.clip_text = true
+	hl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	hl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	h.add_child(hl)
 	var r := Style.button("▶", 20, 40)
 	r.pressed.connect(func(): _cycle(i, 1))
 	h.add_child(r)
+	if team_mode:
+		var tb := Style.button(["Красные", "Синие"][s["team"]], 17, 96)
+		var tc: Color = DB.TEAM_COLORS[s["team"]]
+		tb.add_theme_stylebox_override("normal", Style.sb(tc.darkened(0.35), tc, 2, 10, 6))
+		tb.add_theme_stylebox_override("hover", Style.sb(tc.darkened(0.15), Color.WHITE, 2, 10, 6))
+		tb.pressed.connect(func():
+			slots[i]["team"] = 1 - int(slots[i]["team"])
+			_refresh())
+		h.add_child(tb)
 	var pet := CheckBox.new()
 	pet.text = "Питомец"
 	pet.button_pressed = s["pet"]
@@ -298,7 +330,15 @@ func _start() -> void:
 		var nm: String = s["name"].strip_edges()
 		if nm == "":
 			nm = "Игрок %d" % (i + 1)
-		list.append({"name": nm, "hero": s["hero"], "pet": s["pet"], "slot": i})
-	var cfg := {"players": list, "size": SIZES[size_idx][1], "show_rules": rules_cb.button_pressed}
+		list.append({"name": nm, "hero": s["hero"], "pet": s["pet"], "slot": i, "team": int(s["team"])})
+	var tm := team_mode
+	if tm:
+		var n0 := 0
+		for e in list:
+			if e["team"] == 0:
+				n0 += 1
+		if n0 == 0 or n0 == list.size():
+			tm = false
+	var cfg := {"players": list, "size": SIZES[size_idx][1], "show_rules": rules_cb.button_pressed, "team_mode": tm}
 	DB.last_config = cfg
 	start_requested.emit(cfg)

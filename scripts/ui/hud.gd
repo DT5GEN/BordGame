@@ -52,6 +52,7 @@ var banner: VBoxContainer
 var view_btn: Button
 var confirm_bar: PanelContainer
 var current_qte = null
+var sub_lbl: Label
 
 func _ready() -> void:
 	layer = 5
@@ -270,16 +271,25 @@ func refresh() -> void:
 	var p: Dictionary = game.current()
 	name_lbl.text = p.name
 	dot.add_theme_stylebox_override("panel", Style.sb(p.color, Color.WHITE, 2, 8, 0))
+	hp_bar.max_value = p.max_hp
 	hp_bar.value = p.hp
-	hp_lbl.text = "%d/20" % p.hp
+	hp_lbl.text = "%d/%d" % [p.hp, p.max_hp]
+	var ts: int = game.team_shards(p)
 	var gems := ""
 	for i in 3:
-		gems += "◆ " if p.shards > i else "◇ "
-	if p.shards > 3:
-		gems += "+%d" % (p.shards - 3)
-	shard_lbl.text = gems.strip_edges()
+		gems += "◆ " if ts > i else "◇ "
+	if ts > 3:
+		gems += "+%d" % (ts - 3)
+	shard_lbl.text = ("%s: " % game.team_name(p.team) if game.team_mode else "") + gems.strip_edges()
+	if game.team_mode:
+		shard_lbl.add_theme_color_override("font_color", DB.TEAM_COLORS[p.team].lightened(0.35))
 	var rows: int = game.map.shrine.y - p.pos.y
-	info_lbl.text = "Ловушки %d • Сумка %d • До цели %d" % [p.hand.size(), p.items.size(), rows]
+	var extra := ""
+	if p.wolves > 0:
+		extra += " • Волки %d" % p.wolves
+	if p.bear:
+		extra += " • Медведь"
+	info_lbl.text = "Ловушки %d • Сумка %d • До горы %d%s" % [p.hand.size(), p.items.size(), rows, extra]
 	var st: Array = []
 	if p.now_skip_move:
 		st.append("застрял")
@@ -613,6 +623,58 @@ func extra_roll(who: String, col: Color, bonus: int) -> int:
 	await get_tree().create_timer(0.5).timeout
 	return r + bonus
 
+## Меню выбора действия (например, «Атаковать / Приручить»). Возвращает индекс или −1.
+func choice(title: String, opts: Array) -> int:
+	for c in alert_panel.get_children():
+		c.free()
+	alert_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, Color(Style.GOLD, 0.7), 2, 16, 14))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	alert_panel.add_child(v)
+	v.add_child(_wrap_label(title, 28, Style.GOLD, 420, Style.font_title))
+	var res := [-2]
+	for i in opts.size():
+		var b := Style.button(opts[i][0], 20, 420)
+		b.disabled = not opts[i][1]
+		b.pressed.connect(func(): res[0] = i)
+		v.add_child(b)
+	var cb := Style.button("Отмена", 18, 160)
+	cb.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	cb.pressed.connect(func(): res[0] = -1)
+	v.add_child(cb)
+	alert_panel.visible = true
+	alert_panel.modulate.a = 1.0
+	_show_modal(0.25)
+	await _place_center(alert_panel, 460)
+	var closer := func(): res[0] = -1
+	_alert_closed.connect(closer, CONNECT_ONE_SHOT)
+	alert_closable = true
+	while res[0] == -2:
+		await get_tree().process_frame
+	if _alert_closed.is_connected(closer):
+		_alert_closed.disconnect(closer)
+	alert_panel.visible = false
+	_hide_modal()
+	return res[0]
+
+## Субтитр внизу экрана (для заставки и финала).
+func subtitle(text: String, dur: float) -> void:
+	if sub_lbl == null:
+		sub_lbl = Style.outlined(Style.label("", 30, Style.PARCH, Style.font_title), 10)
+		sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		sub_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sub_lbl.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		sub_lbl.custom_minimum_size = Vector2(1000, 0)
+		sub_lbl.position = Vector2(-500, -120)
+		sub_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root.add_child(sub_lbl)
+	sub_lbl.text = text
+	sub_lbl.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(sub_lbl, "modulate:a", 1.0, 0.3)
+	tw.tween_interval(dur)
+	tw.tween_property(sub_lbl, "modulate:a", 0.0, 0.4)
+
 func battle_finish(result: String, win: bool) -> void:
 	if fast:
 		print("BATTLE: ", result)
@@ -650,6 +712,9 @@ func show_pass(p: Dictionary, reports: Array) -> void:
 	n.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(n)
 	var t := Style.label(DB.heroes[p.hero]["title"], 26, Style.PARCH)
+	if game.team_mode:
+		t.text = "Команда: " + game.team_name(p.team)
+		t.add_theme_color_override("font_color", DB.TEAM_COLORS[p.team].lightened(0.3))
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(t)
 	var s := Style.label("Остальные — не подглядывайте!", 22, Color(Style.GOLD, 0.8))
@@ -789,7 +854,18 @@ func show_victory(p: Dictionary) -> void:
 	var t := Style.outlined(Style.label("Печать снята!", 90, Style.GOLD, Style.font_title), 16)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(t)
-	var n := Style.outlined(Style.label("Победитель: %s" % p.name, 46, p.color.lightened(0.3), Style.font_title), 12)
+	var wtxt := "Победитель: %s" % p.name
+	var wcol: Color = p.color
+	if game.team_mode:
+		var names: Array = []
+		for q in game.players:
+			if q.team == p.team:
+				names.append(q.name)
+		wtxt = "Победила команда «%s»: %s" % [game.team_name(p.team), ", ".join(names)]
+		wcol = DB.TEAM_COLORS[p.team]
+	var n := Style.outlined(Style.label(wtxt, 40, wcol.lightened(0.3), Style.font_title), 12)
+	n.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	n.custom_minimum_size.x = 900
 	n.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(n)
 	var s := Style.outlined(Style.label("В следующей партии с победителем пойдёт питомец — огненный лисёнок Искорка (+1 к обзору).", 24, Style.PARCH), 8)

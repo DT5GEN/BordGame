@@ -15,9 +15,10 @@ var last_winner_slot: int = -1
 var last_config: Dictionary = {}
 
 const PLAYER_COLORS: Array = [
-	Color("e8483f"), Color("3d8bff"), Color("3fbf5f"),
-	Color("f2c12e"), Color("a45ee5"), Color("ff8a2a"),
+	Color("e8483f"), Color("3d8bff"), Color("3fbf5f"), Color("f2c12e"), Color("a45ee5"),
+	Color("ff8a2a"), Color("2fd0c8"), Color("ff6fb5"), Color("9be04a"), Color("c9c9c9"),
 ]
+const TEAM_COLORS: Array = [Color("e8483f"), Color("3d8bff")]
 
 ## 10 героев — подростки-приключенцы. Свои персонажи, «в духе» любимых игр.
 var heroes: Array = [

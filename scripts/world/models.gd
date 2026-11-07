@@ -251,6 +251,19 @@ static func beast(kind: String) -> Node3D:
 				for fz in [-0.14, 0.14]:
 					add(root, cyl(0.035, 0.035, 0.16, 6), b.darkened(0.3), Vector3(0.1 * side, 0.08, fz))
 			add(root, box(Vector3(0.04, 0.12, 0.3)), Color("3a2a1e"), Vector3(0, 0.47, 0.0))
+		"bear":
+			var br := Color("6b4428")
+			var dk := br.darkened(0.3)
+			add(root, sphere(0.3, 14), br, Vector3(0, 0.4, 0), Vector3(1.0, 0.95, 1.35))
+			add(root, sphere(0.19, 14), br, Vector3(0, 0.58, 0.4))
+			add(root, sphere(0.09, 10), Color("c9a27a"), Vector3(0, 0.53, 0.56), Vector3(1, 0.8, 1))
+			add(root, sphere(0.035, 6), Color("1d1a2b"), Vector3(0, 0.56, 0.645))
+			for side in [-1, 1]:
+				add(root, sphere(0.065, 8), br, Vector3(0.13 * side, 0.74, 0.36))
+				add(root, sphere(0.022, 6), Color("1d1a2b"), Vector3(0.075 * side, 0.63, 0.55))
+				for fz in [-0.2, 0.22]:
+					add(root, cyl(0.075, 0.08, 0.32, 8), dk, Vector3(0.17 * side, 0.15, fz))
+			root.scale = Vector3.ONE * 0.95
 		"guardian":
 			var s := Color("8d8f96")
 			var m := Color("6d7f6a")
@@ -322,25 +335,95 @@ static func campfire() -> Node3D:
 	root.set("flicker", true)
 	return root
 
-static func shrine() -> Node3D:
+## Гора с воротами — цель игры. Ворота смотрят на север (−Z), гора уходит на юг (+Z).
+static func mountain_gate() -> Node3D:
 	var root := Node3D.new()
-	var st := Color("b9b4a8")
-	add(root, cyl(0.5, 0.56, 0.12, 16), st, Vector3(0, 0.06, 0))
+	var rock := Color("8a8378")
+	var dark := Color("6e685f")
+	var snow := Color("eef0f5")
+	for sp in [[0.0, 3.2, 2.4, 6.0], [-2.4, 2.6, 1.9, 4.4], [2.5, 2.8, 2.0, 4.8], [-1.1, 4.9, 2.8, 7.2], [1.5, 5.1, 2.6, 6.6], [-3.6, 4.2, 1.8, 3.6], [3.8, 4.4, 1.9, 3.9]]:
+		var x: float = sp[0]
+		var z: float = sp[1]
+		var r: float = sp[2]
+		var h: float = sp[3]
+		add(root, cyl(0.0, r, h, 7), rock.darkened(randf() * 0.12), Vector3(x, h * 0.5 - 0.35, z), Vector3.ONE, Vector3(0, randf() * TAU, 0))
+		add(root, cyl(0.0, r * 0.34, h * 0.34, 7), snow, Vector3(x, h - 0.35 - h * 0.17 + 0.03, z))
+	add(root, box(Vector3(3.4, 2.6, 1.2)), dark, Vector3(0, 0.95, 0.85))
+	add(root, cyl(0.85, 0.95, 0.1, 16), Color("a39d92"), Vector3(0, 0.05, -0.1))
 	for side in [-1, 1]:
-		add(root, box(Vector3(0.18, 1.3, 0.2)), st, Vector3(0.42 * side, 0.75, 0))
-		add(root, box(Vector3(0.24, 0.1, 0.26)), st.darkened(0.1), Vector3(0.42 * side, 0.12, 0))
-	add(root, box(Vector3(1.14, 0.2, 0.28)), st.darkened(0.05), Vector3(0, 1.48, 0))
-	var portal := add(root, cyl(0.34, 0.34, 0.04, 24), Color("9a55f0"), Vector3(0, 0.78, 0), Vector3(1, 1, 1.6), Vector3(1.57, 0, 0), 0.9)
+		add(root, box(Vector3(0.32, 2.0, 0.42)), Color("9a948a"), Vector3(0.66 * side, 1.0, 0.2))
+	add(root, box(Vector3(1.7, 0.34, 0.48)), Color("8f897f"), Vector3(0, 2.1, 0.2))
+	var portal := add(root, box(Vector3(1.0, 1.7, 0.05)), Color("9a55f0"), Vector3(0, 0.9, 0.42), Vector3.ONE, Vector3.ZERO, 1.8)
 	portal.name = "Portal"
+	for side in [-1, 1]:
+		var slab := add(root, box(Vector3(0.5, 1.75, 0.16)), Color("7d776d"), Vector3(0.25 * side, 0.9, 0.24))
+		slab.name = "SlabL" if side < 0 else "SlabR"
+		add(slab, box(Vector3(0.06, 1.2, 0.02)), Color("c58cff"), Vector3(-0.2 * side, 0, -0.09), Vector3.ONE, Vector3.ZERO, 0.8)
 	for i in 3:
-		var s := add(root, sphere(0.06, 8), Color("333333"), Vector3(-0.2 + i * 0.2, 1.48, 0.15))
-		s.name = "Socket%d" % i
+		var x := -0.45 + i * 0.45
+		add(root, cyl(0.12, 0.12, 0.05, 14), Color("e8c36a"), Vector3(x, 2.1, -0.05), Vector3.ONE, Vector3(1.5708, 0, 0), 0.3)
+		var sk := add(root, sphere(0.08, 10), Color("333333"), Vector3(x, 2.1, -0.08))
+		sk.name = "Socket%d" % i
+	var tr := Node3D.new()
+	tr.name = "Treasure"
+	tr.position = Vector3(0, 0.2, 0.5)
+	tr.visible = false
+	root.add_child(tr)
+	add(tr, cyl(0.0, 0.26, 0.42, 6), Color("ffd76a"), Vector3(0, 0.62, 0), Vector3.ONE, Vector3.ZERO, 2.2)
+	add(tr, cyl(0.26, 0.0, 0.34, 6), Color("ff9ad5"), Vector3(0, 0.24, 0), Vector3.ONE, Vector3.ZERO, 1.8)
+	var inner := OmniLight3D.new()
+	inner.name = "Inner"
+	inner.light_color = Color("e0b0ff")
+	inner.omni_range = 7.0
+	inner.light_energy = 0.0
+	inner.position = Vector3(0, 1.2, -0.4)
+	root.add_child(inner)
 	var l := OmniLight3D.new()
 	l.light_color = Color("c58cff")
-	l.omni_range = 5.0
-	l.light_energy = 2.0
-	l.position = Vector3(0, 0.9, 0.4)
+	l.omni_range = 4.0
+	l.light_energy = 1.2
+	l.position = Vector3(0, 1.6, -0.8)
 	root.add_child(l)
+	return root
+
+## Эльф-волшебник для заставки.
+static func elf(robe: Color) -> Node3D:
+	var root := Node3D.new()
+	var skin := Color("f3e2d0")
+	add(root, cyl(0.07, 0.24, 0.72, 10), robe, Vector3(0, 0.36, 0))
+	add(root, cyl(0.075, 0.075, 0.05, 10), Color("e8c36a"), Vector3(0, 0.55, 0))
+	add(root, sphere(0.14, 14), skin, Vector3(0, 0.84, 0))
+	add(root, sphere(0.155, 14, true), robe.darkened(0.15), Vector3(0, 0.86, -0.02))
+	add(root, cyl(0.0, 0.12, 0.3, 8), robe.darkened(0.15), Vector3(0, 1.06, -0.08), Vector3.ONE, Vector3(-0.5, 0, 0))
+	for side in [-1, 1]:
+		add(root, cyl(0.0, 0.03, 0.14, 5), skin, Vector3(0.15 * side, 0.86, -0.01), Vector3.ONE, Vector3(0, 0, -1.2 * side))
+		add(root, sphere(0.022, 6), Color("4ad0ff"), Vector3(0.05 * side, 0.85, 0.125), Vector3.ONE, Vector3.ZERO, 2.0)
+	add(root, cyl(0.016, 0.02, 1.1, 6), Color("6b4a2c"), Vector3(0.22, 0.55, 0.05))
+	add(root, sphere(0.06, 10), Color("8fe8ff"), Vector3(0.22, 1.13, 0.05), Vector3.ONE, Vector3.ZERO, 3.0)
+	root.set_script(Bobber)
+	return root
+
+static func glowing_chest() -> Node3D:
+	var root := chest()
+	for c in root.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).material_override is StandardMaterial3D:
+			pass
+	var l := OmniLight3D.new()
+	l.name = "Glow"
+	l.light_color = Color("ffd76a")
+	l.omni_range = 3.0
+	l.light_energy = 2.5
+	l.position = Vector3(0, 0.5, 0)
+	root.add_child(l)
+	add(root, sphere(0.18, 12), Color(1.0, 0.85, 0.4, 0.35), Vector3(0, 0.3, 0), Vector3(1.6, 1.0, 1.3), Vector3.ZERO, 2.0)
+	return root
+
+static func scroll() -> Node3D:
+	var root := Node3D.new()
+	add(root, cyl(0.035, 0.035, 0.3, 10), Color("e8d6a8"), Vector3.ZERO, Vector3.ONE, Vector3(0, 0, 1.5708))
+	for side in [-1, 1]:
+		add(root, cyl(0.045, 0.045, 0.03, 10), Color("6b4520"), Vector3(0.16 * side, 0, 0), Vector3.ONE, Vector3(0, 0, 1.5708))
+	add(root, box(Vector3(0.05, 0.08, 0.006)), Color("9a1e1e"), Vector3(0, -0.02, 0.036))
 	return root
 
 static func event_stone() -> Node3D:

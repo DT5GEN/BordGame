@@ -58,6 +58,7 @@ var hl_mm: MultiMesh
 var fog_mm: MultiMesh
 var haze_mm: MultiMesh
 var view_first := false
+var team_mode := false
 var fp_yaw := 0.0
 var fp_pitch := -0.35
 var settings_panel
@@ -74,6 +75,8 @@ var _dragging := false
 var _touches := {}
 var _pinch_d := 0.0
 var _rot := false
+var _rot_moved := 0.0
+var _press_t := 0
 var _two_mid := Vector2.ZERO
 const YAW_LIMIT := 0.6
 const PITCH_MIN := 0.55
@@ -195,18 +198,33 @@ func _spawn_objects() -> void:
 		entities.add_child(n)
 		d["node"] = n
 		objects[p] = d
-	shrine_node = Models.shrine()
+	shrine_node = Models.mountain_gate()
 	shrine_node.position = map.world_pos(map.shrine)
-	shrine_node.rotation.y = PI
 	entities.add_child(shrine_node)
 
 func _setup_players() -> void:
 	var list: Array = cfg["players"]
+	team_mode = cfg.get("team_mode", false)
+	var team_n := [0, 0]
+	if team_mode:
+		for pc in list:
+			team_n[int(pc.get("team", 0))] += 1
+		if team_n[0] == 0 or team_n[1] == 0:
+			team_mode = false
+	var team_explored := [_initial_explored(), _initial_explored()]
+	var team_discovered := [{}, {}]
+	var used := {}
 	for i in list.size():
 		var pc: Dictionary = list[i]
 		var pr: Dictionary = DB.heroes[pc["hero"]]
 		var node: Node3D = Models.hero(pr)
-		var start: Vector2i = map.starts[i]
+		var team := int(pc.get("team", 0)) if team_mode else -1
+		var start: Vector2i = map.starts[i] if not team_mode else _team_start(team, used)
+		used[start] = true
+		# баланс: меньшая команда сильнее
+		var kb := 1.0
+		if team_mode and team_n[team] < team_n[1 - team]:
+			kb = float(team_n[1 - team]) / float(team_n[team])
 		node.position = map.world_pos(start)
 		node.rotation.y = 0.0
 		var ring := MeshInstance3D.new()
@@ -232,7 +250,7 @@ func _setup_players() -> void:
 		tag.font = Style.font_bold
 		tag.font_size = 44
 		tag.outline_size = 12
-		tag.modulate = DB.PLAYER_COLORS[i].lightened(0.3)
+		tag.modulate = (DB.TEAM_COLORS[team] if team_mode else DB.PLAYER_COLORS[i]).lightened(0.3)
 		tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		tag.no_depth_test = true
 		tag.pixel_size = 0.004
@@ -248,12 +266,62 @@ func _setup_players() -> void:
 			hand.append(DB.random_trap(rng))
 		players.append({
 			"name": pc["name"], "slot": pc.get("slot", i), "hero": pc["hero"], "color": DB.PLAYER_COLORS[i],
-			"hp": MAX_HP, "pos": start, "shards": 0, "hand": hand, "items": ["potion"],
+			"hp": int(round(MAX_HP * kb)), "max_hp": int(round(MAX_HP * kb)), "dmg_mult": kb, "step_mult": 1.0 + (kb - 1.0) * 0.5,
+			"team": team, "wolves": 0, "bear": false, "bear_round": -1, "tamed": 0,
+			"pos": start, "shards": 0, "hand": hand, "items": ["potion"],
 			"dot": 0, "skip_move": 0, "slow": 0, "skip_turn": 0, "block_traps": 0, "vuln": 0,
 			"now_skip_move": false, "now_slow": 0, "now_block_traps": false, "now_vuln": false,
 			"marks": {}, "campfire": start, "warm_round": -1, "pet": pc.get("pet", false), "reports": [],
-			"discovered": {}, "explored": _initial_explored(), "die": "D6", "node": node, "lantern": lantern, "trail": [],
+			"discovered": team_discovered[team] if team_mode else {}, "explored": team_explored[team] if team_mode else _initial_explored(), "die": "D6", "node": node, "lantern": lantern, "trail": [],
 		})
+
+func _team_start(team: int, used: Dictionary) -> Vector2i:
+	var ax := int(map.w * (0.3 if team == 0 else 0.7))
+	for off in [Vector2i(0, 1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(0, 2), Vector2i(1, 2), Vector2i(-1, 2),
+			Vector2i(2, 1), Vector2i(-2, 1), Vector2i(2, 2), Vector2i(-2, 2), Vector2i(0, 0), Vector2i(1, 0)]:
+		var t: Vector2i = Vector2i(ax, 0) + off
+		if map.inb(t) and map.passable(t) and not used.has(t):
+			return t
+	return Vector2i(ax, 1)
+
+# ---------- команды
+func allies_of(i: int) -> Array:
+	if not team_mode:
+		return [i]
+	var a: Array = []
+	for j in players.size():
+		if players[j].team == players[i].team:
+			a.append(j)
+	return a
+
+func is_enemy(i: int, j: int) -> bool:
+	if i == j:
+		return false
+	return not team_mode or players[i].team != players[j].team
+
+func _enemy_at(t: Vector2i, me: int) -> int:
+	for j in players.size():
+		if is_enemy(me, j) and players[j].pos == t:
+			return j
+	return -1
+
+func team_shards(p: Dictionary) -> int:
+	if not team_mode:
+		return p.shards
+	var n := 0
+	for q in players:
+		if q.team == p.team:
+			n += q.shards
+	return n
+
+func team_name(team: int) -> String:
+	return ["Красные", "Синие"][team]
+
+func team_sees(t: Vector2i) -> bool:
+	for j in allies_of(cur):
+		if can_see(players[j], t):
+			return true
+	return false
 
 func _initial_explored() -> Dictionary:
 	# Святилище все знают: это цель на юге
@@ -325,6 +393,9 @@ func _setup_camera() -> void:
 
 # ================================================================= КАМЕРА И ВВОД
 func _process(delta: float) -> void:
+	if _press and not _dragging and Time.get_ticks_msec() - _press_t > 550:
+		_press = false
+		_on_long_press(_press_pos)
 	if follow != null and is_instance_valid(follow):
 		cam_goal = follow.position
 	cam_target = cam_target.lerp(cam_goal, 1.0 - exp(-delta * 4.0))
@@ -378,17 +449,25 @@ func _unhandled_input(e: InputEvent) -> void:
 				_press = true
 				_dragging = false
 				_press_pos = e.position
+				_press_t = Time.get_ticks_msec()
 			else:
 				if _press and not _dragging:
 					_on_click(e.position)
 				_press = false
 		elif e.button_index == MOUSE_BUTTON_RIGHT:
-			_rot = e.pressed
+			if e.pressed:
+				_rot = true
+				_rot_moved = 0.0
+			else:
+				_rot = false
+				if _rot_moved < 8.0:
+					_on_long_press(e.position)
 		elif e.button_index == MOUSE_BUTTON_WHEEL_UP and e.pressed:
 			_zoom(0.9)
 		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN and e.pressed:
 			_zoom(1.1)
 	elif e is InputEventMouseMotion and _rot:
+		_rot_moved += e.relative.length()
 		_tilt(e.relative)
 	elif e is InputEventMouseMotion and _press:
 		if not _dragging and e.position.distance_to(_press_pos) > 14.0:
@@ -491,7 +570,10 @@ func _tile_hint(t: Vector2i) -> void:
 	var o = objects.get(t)
 	if o != null and _object_visible(o, players[cur]):
 		match o["type"]:
-			"beast": txt += ". Здесь %s (сила %d)" % [DB.beasts[o["kind"]]["name"], int(DB.beasts[o["kind"]]["power"])]
+			"beast":
+				txt += ". Здесь %s (сила %d)" % [DB.beasts[o["kind"]]["name"], int(DB.beasts[o["kind"]]["power"])]
+				if o["kind"] in ["wolf", "bear"]:
+					txt += ". Подойди вплотную: правый клик или долгое нажатие — приручить"
 			"chest": txt += ". Сундук"
 			"shard": txt += ". Осколок!"
 			"event": txt += ". Загадочный камень"
@@ -568,7 +650,7 @@ func roll(die: String) -> void:
 	var faces: Array = DB.die_faces(die)
 	var i := rng.randi_range(0, faces.size() - 1)
 	var face := i + 1
-	var steps := int(faces[i])
+	var steps := int(round(int(faces[i]) * float(p.step_mult)))
 	var notes: Array = []
 	if die == "D20" and face == 20:
 		notes.append("Критическая удача! Находка: " + _give_loot(p))
@@ -752,17 +834,22 @@ func _object_visible(o: Dictionary, p: Dictionary) -> bool:
 	match o["type"]:
 		"campfire", "chest", "event":
 			return p.explored.has(pos)
-	return p.discovered.has(pos) or can_see(p, pos)
+	return p.discovered.has(pos) or team_sees(pos)
 
 ## Туман войны: видимое — ярко, разведанное — тусклее, рядом с обзором — дымка с силуэтами, дальше — тьма.
 func refresh_view() -> void:
 	var p: Dictionary = players[cur]
 	var r := vision(p)
-	for dz in range(-r, r + 1):
-		for dx in range(-r, r + 1):
-			var e: Vector2i = p.pos + Vector2i(dx, dz)
-			if map.inb(e):
-				p.explored[e] = true
+	var viewers: Array = []
+	for j in allies_of(cur):
+		var q: Dictionary = players[j]
+		var rq := vision(q)
+		viewers.append([q.pos, rq])
+		for dz in range(-rq, rq + 1):
+			for dx in range(-rq, rq + 1):
+				var e: Vector2i = q.pos + Vector2i(dx, dz)
+				if map.inb(e):
+					p.explored[e] = true
 	var refs: Dictionary = info["tile_ref"]
 	var decor: Dictionary = info["decor_ref"]
 	var fog_items: Array = []
@@ -770,14 +857,18 @@ func refresh_view() -> void:
 		var tp: Vector2i = t
 		var ref: Array = refs[t]
 		var base: Color = ref[2]
-		var d := maxi(absi(tp.x - p.pos.x), absi(tp.y - p.pos.y))
+		# насколько клетка дальше границы обзора ближайшего союзника (0 и меньше — видно)
+		var margin := 9999
+		for vw in viewers:
+			var vp: Vector2i = vw[0]
+			margin = mini(margin, maxi(absi(tp.x - vp.x), absi(tp.y - vp.y)) - int(vw[1]))
 		var k := 1.0
-		if d > r:
+		if margin > 0:
 			if p.explored.has(tp):
 				k = 0.6
 			else:
 				k = 0.4
-				fog_items.append([tp, FOG_HAZE if d <= r + 2 else FOG_DARK])
+				fog_items.append([tp, FOG_HAZE if margin <= 2 else FOG_DARK])
 		var dark: bool = night and tp.y <= dark_row
 		var c := _tint(base, k, dark)
 		(ref[0] as MultiMesh).set_instance_color(ref[1], c)
@@ -790,16 +881,16 @@ func refresh_view() -> void:
 		info["bridge_nodes"][bt].visible = p.explored.has(bt) or bd <= r + 2
 	for t in objects:
 		var o: Dictionary = objects[t]
-		if o["type"] in ["beast", "shard"] and can_see(p, t):
+		if o["type"] in ["beast", "shard"] and team_sees(t):
 			p.discovered[t] = true
 		o["node"].visible = _object_visible(o, p)
 	for i in players.size():
 		var q: Dictionary = players[i]
-		var vis: bool = i == cur or can_see(p, q.pos) or p.marks.has(i)
+		var vis: bool = i == cur or not is_enemy(cur, i) or team_sees(q.pos) or p.marks.has(i)
 		q.node.visible = vis and not (i == cur and view_first)
 		q.node.get_node("Ring").visible = i == cur
 	for tr in traps:
-		tr["node"].visible = tr["owner"] == cur
+		tr["node"].visible = not is_enemy(cur, tr["owner"])
 	_update_lights()
 
 func _tint(base: Color, k: float, dark: bool) -> Color:
@@ -859,7 +950,7 @@ func _update_shrine_sockets() -> void:
 	var p: Dictionary = players[cur]
 	for i in 3:
 		var s: MeshInstance3D = shrine_node.get_node("Socket%d" % i)
-		s.material_override = Models.mat(Color("7fe3ff"), 2.0) if p.shards > i else Models.mat(Color("333333"))
+		s.material_override = Models.mat(Color("7fe3ff"), 2.0) if team_shards(p) > i else Models.mat(Color("333333"))
 
 # ================================================================= ПЕРЕМЕЩЕНИЕ
 func _player_at(t: Vector2i, except: int) -> int:
@@ -901,10 +992,10 @@ func _recalc() -> void:
 			var blocked := false
 			if o != null and o["type"] in ["beast", "chest", "event"]:
 				blocked = true
-			var opp := _player_at(n, cur)
-			if opp >= 0 and can_see(p, n):
+			var opp := _enemy_at(n, cur)
+			if opp >= 0 and team_sees(n):
 				blocked = true
-			if map.get_t(n) == MapGen.SHRINE and p.shards < 3:
+			if map.get_t(n) == MapGen.SHRINE and team_shards(p) < 3:
 				blocked = true
 			if blocked:
 				targets[n] = true
@@ -912,6 +1003,12 @@ func _recalc() -> void:
 				targets.erase(n)
 				open.append(n)
 	dist.erase(p.pos)
+	# на клетке союзника можно пройти, но не остановиться
+	for t in dist.keys():
+		for j in players.size():
+			if j != cur and not is_enemy(cur, j) and players[j].pos == t:
+				dist.erase(t)
+				break
 	reach = dist
 	_show_reach()
 
@@ -985,7 +1082,7 @@ func _walk(path: Array) -> void:
 			steps_left -= c
 			await _fight_beast(p, tile, o)
 			break
-		var opp := _player_at(tile, cur)
+		var opp := _enemy_at(tile, cur)
 		if opp >= 0:
 			_face(p, tile)
 			steps_left -= c
@@ -993,13 +1090,13 @@ func _walk(path: Array) -> void:
 			await _duel(p, players[opp])
 			break
 		if map.get_t(tile) == MapGen.SHRINE:
-			if p.shards >= 3:
+			if team_shards(p) >= 3:
 				await _move_hero(p, tile)
 				p.pos = tile
 				p.node.walking = false
 				_victory(p)
 				return
-			hud.toast("Святилище запечатано. Нужно 3 осколка, у тебя %d." % p.shards, Style.GOLD, 3.0)
+			hud.toast("Ворота горы запечатаны. Нужно 3 осколка, у %s %d." % ["команды" if team_mode else "тебя", team_shards(p)], Style.GOLD, 3.0)
 			break
 		var from: Vector2i = p.pos
 		await _move_hero(p, tile)
@@ -1009,6 +1106,8 @@ func _walk(path: Array) -> void:
 			p.trail.pop_front()
 		steps_left -= c
 		refresh_view()
+		if await _bear_guard(p):
+			break
 		var stop: bool = await _on_enter(p, tile)
 		if stop or p.hp <= 0 or game_over:
 			break
@@ -1036,12 +1135,12 @@ func _on_enter(p: Dictionary, tile: Vector2i) -> bool:
 		p.campfire = tile
 		if p.warm_round != round_no:
 			p.warm_round = round_no
-			p.hp = mini(MAX_HP, p.hp + 3)
+			p.hp = mini(p.max_hp, p.hp + 3)
 			_float_text(p.node, "+3 HP", Style.GREEN)
 			hud.toast("Костёр согрел тебя: +3 HP. Здесь ты очнёшься, если лишишься сил.", Color("ffb070"), 3.0)
 	var hit: Array = []
 	for tr in traps:
-		if tr["pos"] == tile and tr["owner"] != cur:
+		if tr["pos"] == tile and is_enemy(cur, tr["owner"]):
 			hit.append(tr)
 	for tr in hit:
 		await _trigger_trap(tr, p)
@@ -1110,7 +1209,7 @@ func _give_loot(p: Dictionary) -> String:
 		var c := DB.random_trap(rng)
 		p.hand.append(c)
 		return "карта ловушки «%s»" % DB.traps[c]["name"]
-	var keys := ["potion", "potion", "boots", "torch"]
+	var keys := ["potion", "potion", "boots", "torch", "meat", "meat", "meat"]
 	if rng.randf() < 0.08:
 		keys = ["honey"]
 	var k: String = keys[rng.randi() % keys.size()]
@@ -1185,10 +1284,10 @@ func use_item(idx: int) -> void:
 	var k: String = p.items[idx]
 	match k:
 		"potion":
-			p.hp = mini(MAX_HP, p.hp + 6)
+			p.hp = mini(p.max_hp, p.hp + 6)
 			_float_text(p.node, "+6 HP", Style.GREEN)
 		"honey":
-			p.hp = MAX_HP
+			p.hp = p.max_hp
 			_float_text(p.node, "Полное здоровье!", Style.GREEN)
 		"boots":
 			if not rolled:
@@ -1269,7 +1368,7 @@ func _trigger_trap(tr: Dictionary, p: Dictionary) -> void:
 	var fx: Dictionary = card["fx"]
 	var owner: Dictionary = players[tr["owner"]]
 	var lines: Array = []
-	var dmg := int(fx.get("dmg", 0))
+	var dmg := int(round(int(fx.get("dmg", 0)) * float(owner.dmg_mult)))
 	if dmg > 0:
 		_damage(p, dmg)
 		lines.append("−%d HP" % dmg)
@@ -1294,7 +1393,7 @@ func _trigger_trap(tr: Dictionary, p: Dictionary) -> void:
 		p.vuln += int(fx["vuln"])
 		lines.append("атаки по тебе сильнее на 1")
 	if fx.has("heal_owner"):
-		owner.hp = mini(MAX_HP, owner.hp + int(fx["heal_owner"]))
+		owner.hp = mini(owner.max_hp, owner.hp + int(fx["heal_owner"]))
 		lines.append("%s получает +%d HP" % [owner.name, int(fx["heal_owner"])])
 	if fx.has("steal_card") and not p.hand.is_empty():
 		var c: int = p.hand.pop_at(rng.randi_range(0, p.hand.size() - 1))
@@ -1367,7 +1466,7 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 	await hud.battle_finish(txt, win)
 	_end_fight()
 	if win:
-		o["hits"] -= 1
+		o["hits"] -= int(round(float(p.dmg_mult))) + int(p.wolves)
 		if o["hits"] > 0:
 			var tw := create_tween()
 			tw.tween_property(n, "position:x", n.position.x + 0.1, 0.05)
@@ -1382,6 +1481,9 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 			_float_text(p.node, "+1 осколок", Style.TEAL)
 			hud.toast("%s повержен и оставил осколок! У тебя %d из 3." % [def["name"], p.shards], Style.TEAL, 3.0)
 			_update_shrine_sockets()
+		elif o["kind"] == "bear":
+			p.items.append("honey")
+			hud.toast("Медведь ушёл в чащу и оставил банку мёда!", Style.GOLD, 3.0)
 		else:
 			var what := _give_loot(p)
 			hud.toast("%s убежал. Добыча: %s" % [def["name"], what], Style.GOLD, 3.0)
@@ -1406,7 +1508,7 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 	await hud.battle_finish(res, a > d)
 	_end_fight()
 	if a > d:
-		var dmg := 2 + (1 if q.vuln > 0 else 0)
+		var dmg := int(round(2 * float(p.dmg_mult))) + 2 * int(p.wolves) + (1 if q.vuln > 0 else 0)
 		_damage(q, dmg)
 		if q.shards > 0:
 			q.shards -= 1
@@ -1422,7 +1524,7 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 		else:
 			q.reports.append("%s напал(а) на тебя (−%d HP)." % [p.name, dmg])
 	elif d > a:
-		_damage(p, 2)
+		_damage(p, int(round(2 * float(q.dmg_mult))) + 2 * int(q.wolves))
 		q.reports.append("%s напал(а), но ты отбился!" % p.name)
 	else:
 		_damage(p, 1)
@@ -1551,7 +1653,7 @@ func _float_text(node: Node3D, txt: String, col: Color) -> void:
 
 func _respawn(p: Dictionary) -> void:
 	_stop_walk(p)
-	await hud.alert("%s без сил..." % p.name, "Герой очнётся у последнего костра с 12 HP. Потерян один осколок и одна карта.", Style.RED)
+	await hud.alert("%s без сил..." % p.name, "Герой очнётся у последнего костра. Потерян один осколок и одна карта.", Style.RED)
 	if p.shards > 0:
 		p.shards -= 1
 		var drop: Vector2i = p.pos
@@ -1580,19 +1682,183 @@ func _respawn(p: Dictionary) -> void:
 			if map.passable(cf + d) and _player_at(cf + d, idx) < 0:
 				cf = cf + d
 				break
-	p.hp = 12
+	p.hp = int(p.max_hp * 0.6)
 	p.pos = cf
 	p.trail.clear()
 	p.node.position = map.world_pos(cf)
 	refresh_view()
 
+# ================================================================= ПРИРУЧЕНИЕ
+func _on_long_press(sp: Vector2) -> void:
+	if busy or game_over or mode != "move":
+		return
+	var t := _pick(sp)
+	if not map.inb(t):
+		return
+	var o = objects.get(t)
+	var p: Dictionary = players[cur]
+	if o == null or o["type"] != "beast" or not _object_visible(o, p):
+		return
+	var d: Vector2i = t - p.pos
+	var def: Dictionary = DB.beasts[o["kind"]]
+	if absi(d.x) + absi(d.y) != 1:
+		hud.toast("Подойди к зверю вплотную, чтобы приручить или атаковать.", Style.GOLD, 2.5)
+		return
+	var opts: Array = []
+	var cost: int = map.cost(t)
+	opts.append(["Атаковать (%d шаг.)" % cost, rolled and steps_left >= cost])
+	var tame_txt := "Этого зверя не приручить"
+	var can_tame := false
+	match o["kind"]:
+		"wolf":
+			var need := 2 if p.wolves == 0 else 1
+			tame_txt = "Приручить — %d мяса (есть %d)" % [need, p.items.count("meat")]
+			can_tame = p.items.count("meat") >= need
+		"bear":
+			if p.bear:
+				tame_txt = "У тебя уже есть медведь"
+			else:
+				tame_txt = "Приручить — 1 банка мёда (есть %d)" % p.items.count("honey")
+				can_tame = p.items.count("honey") >= 1
+	opts.append([tame_txt, can_tame])
+	busy = true
+	var choice: int = await hud.choice(def["name"], opts)
+	busy = false
+	if choice == 0:
+		steps_left -= cost
+		_face(p, t)
+		busy = true
+		hud.set_phase("busy")
+		await _fight_beast(p, t, o)
+		busy = false
+		if p.hp <= 0:
+			await _respawn(p)
+		hud.set_phase("act")
+		refresh_view()
+		_recalc()
+		hud.refresh()
+	elif choice == 1:
+		_tame(p, t, o)
+
+func _tame(p: Dictionary, t: Vector2i, o: Dictionary) -> void:
+	var kind: String = o["kind"]
+	if kind == "wolf":
+		var need := 2 if p.wolves == 0 else 1
+		for k in need:
+			p.items.erase("meat")
+	else:
+		p.items.erase("honey")
+	objects.erase(t)
+	var n: Node3D = o["node"]
+	n.get_parent().remove_child(n)
+	p.node.add_child(n)
+	n.scale = Vector3.ONE * (0.75 if kind == "wolf" else 0.85)
+	n.set("_base_scale", n.scale)
+	n.rotation = Vector3.ZERO
+	var wolf_spots := [Vector3(-0.5, 0, -0.35), Vector3(0.5, 0, -0.35), Vector3(0, 0, -0.65), Vector3(-0.65, 0, 0.1), Vector3(0.65, 0, 0.1)]
+	if kind == "wolf":
+		n.name = "Wolf%d" % p.wolves
+		n.position = wolf_spots[mini(p.wolves, wolf_spots.size() - 1)]
+		p.wolves += 1
+	else:
+		n.name = "BearPet"
+		n.position = Vector3(-0.35, 0, -0.75)
+		p.bear = true
+	Settings.play("magic")
+	_float_text(p.node, "Приручён!", Style.GREEN)
+	if kind == "wolf":
+		hud.toast("Волк теперь твой! Каждый волк добавляет +2 к урону. Волков: %d" % p.wolves, Style.GREEN, 3.5)
+	else:
+		hud.toast("Медведь теперь твой! Он охраняет тебя на 3 клетки и сам бросается на врагов.", Style.GREEN, 4.0)
+	_recalc()
+	hud.refresh()
+
+## Ручной медведь врага бросается на героя, если тот подошёл ближе 3 клеток (раз за круг).
+func _bear_guard(p: Dictionary) -> bool:
+	for j in players.size():
+		var q: Dictionary = players[j]
+		if not q.bear or not is_enemy(cur, j) or q.bear_round == round_no:
+			continue
+		var d := maxi(absi(q.pos.x - p.pos.x), absi(q.pos.y - p.pos.y))
+		if d > 3:
+			continue
+		q.bear_round = round_no
+		_stop_walk(p)
+		q.node.visible = true
+		var bn: Node3D = q.node.get_node_or_null("BearPet")
+		if bn:
+			var home := bn.position
+			var to_local: Vector3 = q.node.to_local(p.node.global_position)
+			var tw := create_tween()
+			tw.tween_property(bn, "position", home.lerp(to_local, 0.85), 0.35)
+			tw.tween_interval(0.3)
+			tw.tween_property(bn, "position", home, 0.4)
+		Settings.play("hit")
+		var dmg := int(round(3 * float(q.dmg_mult)))
+		_damage(p, dmg)
+		q.reports.append("Твой медведь прогнал героя %s (−%d HP)!" % [p.name, dmg])
+		await hud.alert("Медведь-защитник!", "Ручной медведь игрока %s бросился на тебя: −%d HP.\nОн охраняет хозяина на 3 клетки вокруг." % [q.name, dmg], Color("c08a5a"))
+		return true
+	return false
+
+# ================================================================= ФИНАЛ
 func _victory(p: Dictionary) -> void:
 	game_over = true
 	_clear_highlight()
 	DB.last_winner_slot = p.slot
-	var portal: MeshInstance3D = shrine_node.get_node("Portal")
+	hud.set_phase("over")
+	_stop_walk(p)
+	follow = null
+	view_first = false
+	cam_goal = shrine_node.position + Vector3(0, 1.0, -0.6)
 	var tw := create_tween()
-	tw.tween_property(portal, "scale", Vector3(2.2, 1, 3.0), 0.8)
-	cam_dist = 6.0
-	follow = p.node
+	tw.tween_property(self, "cam_yaw", 0.45, 1.0)
+	tw.parallel().tween_property(self, "cam_pitch", deg_to_rad(22.0), 1.0)
+	tw.parallel().tween_property(self, "cam_dist", 6.5, 1.0)
+	await get_tree().create_timer(1.1).timeout
+	var voice_len: float = Settings.play_voice("finale")
+	hud.subtitle("Осколки вернулись на свои места…", 3.0)
+	# кристаллы летят в гнёзда
+	for i in 3:
+		var sock: MeshInstance3D = shrine_node.get_node("Socket%d" % i)
+		var c := Models.shard()
+		c.scale = Vector3.ONE * 0.5
+		add_child(c)
+		c.global_position = p.node.global_position + Vector3(0, 0.8, 0)
+		var tw2 := create_tween()
+		tw2.tween_property(c, "global_position", sock.global_position + Vector3(0, -0.25, -0.05), 0.7).set_trans(Tween.TRANS_SINE)
+		await tw2.finished
+		c.queue_free()
+		sock.material_override = Models.mat(Color("7fe3ff"), 3.0)
+		Settings.play("shard", 0.0)
+		await get_tree().create_timer(0.25).timeout
+	# гора дрожит, створки разъезжаются
+	Settings.play("night", 0.0)
+	hud.subtitle("Гора открывает свою тайну…", 3.0)
+	var base := shrine_node.position
+	var shake := create_tween()
+	for k in 10:
+		shake.tween_property(shrine_node, "position", base + Vector3(randf_range(-0.05, 0.05), 0, randf_range(-0.03, 0.03)), 0.06)
+	shake.tween_property(shrine_node, "position", base, 0.06)
+	await shake.finished
+	var sl: Node3D = shrine_node.get_node("SlabL")
+	var sr: Node3D = shrine_node.get_node("SlabR")
+	var inner: OmniLight3D = shrine_node.get_node("Inner")
+	var tr3: Node3D = shrine_node.get_node("Treasure")
+	var tw3 := create_tween()
+	tw3.tween_property(sl, "position:x", -0.78, 1.6).set_trans(Tween.TRANS_SINE)
+	tw3.parallel().tween_property(sr, "position:x", 0.78, 1.6).set_trans(Tween.TRANS_SINE)
+	tw3.parallel().tween_property(inner, "light_energy", 4.0, 1.6)
+	await tw3.finished
+	tr3.visible = true
+	tr3.scale = Vector3.ONE * 0.2
+	var tw4 := create_tween()
+	tw4.tween_property(tr3, "scale", Vector3.ONE, 0.6)
+	tw4.parallel().tween_property(tr3, "position", Vector3(0, 0.6, -0.2), 1.2).set_trans(Tween.TRANS_BACK)
+	tw4.parallel().tween_property(tr3, "rotation:y", TAU, 2.0)
+	Settings.play("victory", 0.0)
+	hud.subtitle("Сердце Долины нашло своего героя!", 3.5)
+	await get_tree().create_timer(maxf(2.6, voice_len - 7.0)).timeout
 	hud.show_victory(p)
+
+
