@@ -59,6 +59,10 @@ var fog_mm: MultiMesh
 var haze_mm: MultiMesh
 var view_first := false
 var team_mode := false
+var map_code := 0
+var units: Array = []
+var pending_summon := -1
+var summon_targets := {}
 var fp_yaw := 0.0
 var fp_pitch := -0.35
 var settings_panel
@@ -87,7 +91,10 @@ func _ready() -> void:
 	rng.randomize()
 	var sz: Vector2i = cfg.get("size", Vector2i(28, 64))
 	map = MapGen.new()
-	map.generate(sz.x, sz.y, cfg.get("seed", rng.randi()), cfg["players"].size())
+	map_code = int(cfg.get("seed", 0))
+	if map_code <= 0:
+		map_code = rng.randi_range(10000, 99999)
+	map.generate(sz.x, sz.y, map_code, cfg["players"].size())
 	_setup_env()
 	var tiles := Node3D.new()
 	tiles.name = "Tiles"
@@ -118,6 +125,8 @@ func _ready() -> void:
 	hud.roll_requested.connect(roll)
 	hud.end_turn_requested.connect(end_turn)
 	hud.trap_card_chosen.connect(start_trap_mode)
+	hud.summon_chosen.connect(start_summon_mode)
+	hud.reroll_requested.connect(reroll)
 	hud.item_used.connect(use_item)
 	hud.pass_ready.connect(_turn_start_effects)
 	hud.help_requested.connect(func(): papyrus.open())
@@ -261,14 +270,21 @@ func _setup_players() -> void:
 			pet.position = Vector3(0.38, 0, -0.22)
 			node.add_child(pet)
 		entities.add_child(node)
+		var ab_id: String = DB.ability(int(pc.get("ability", i))) ["id"]
 		var hand: Array = []
-		for k in 3:
+		for k in (5 if ab_id == "trapper" else 3):
 			hand.append(DB.random_trap(rng))
+		var hp_max := int(round(MAX_HP * kb)) + (6 if ab_id == "tough" else 0)
+		var start_items: Array = ["potion"]
+		if ab_id == "beast":
+			start_items.append("meat")
 		players.append({
 			"name": pc["name"], "slot": pc.get("slot", i), "hero": pc["hero"], "color": DB.PLAYER_COLORS[i],
-			"hp": int(round(MAX_HP * kb)), "max_hp": int(round(MAX_HP * kb)), "dmg_mult": kb, "step_mult": 1.0 + (kb - 1.0) * 0.5,
+			"hp": hp_max, "max_hp": hp_max, "dmg_mult": kb, "step_mult": 1.0 + (kb - 1.0) * 0.5,
+			"ability": ab_id, "summons": [rng.randi_range(0, DB.summons.size() - 1)], "bonus_done": false,
+			"rerolled": false, "moved": false, "block_summon": 0, "now_block_summon": false,
 			"team": team, "wolves": 0, "bear": false, "bear_round": -1, "tamed": 0,
-			"pos": start, "shards": 0, "hand": hand, "items": ["potion"],
+			"pos": start, "shards": 0, "hand": hand, "items": start_items,
 			"dot": 0, "skip_move": 0, "slow": 0, "skip_turn": 0, "block_traps": 0, "vuln": 0,
 			"now_skip_move": false, "now_slow": 0, "now_block_traps": false, "now_vuln": false,
 			"marks": {}, "campfire": start, "warm_round": -1, "pet": pc.get("pet", false), "reports": [],
@@ -551,6 +567,10 @@ func _on_click(sp: Vector2) -> void:
 		if trap_targets.has(t):
 			_place_trap(t)
 		return
+	if mode == "summon":
+		if summon_targets.has(t):
+			_place_summon(t)
+		return
 	if rolled and reach.has(t):
 		_walk(_path_to(t))
 	else:
@@ -591,6 +611,8 @@ func begin_turn() -> void:
 	rolled = false
 	steps_left = 0
 	mode = "move"
+	p.rerolled = false
+	p.moved = false
 	_clear_highlight()
 	follow = p.node
 	var pr: Dictionary = Settings.pref(p.name)
@@ -624,6 +646,9 @@ func _turn_start_effects() -> void:
 	p.now_vuln = p.vuln > 0
 	if p.vuln > 0:
 		p.vuln -= 1
+	p.now_block_summon = p.block_summon > 0
+	if p.block_summon > 0:
+		p.block_summon -= 1
 	if p.dot > 0:
 		p.dot -= 1
 		_damage(p, 1)
@@ -639,6 +664,14 @@ func _turn_start_effects() -> void:
 		await get_tree().create_timer(1.6).timeout
 		end_turn()
 		return
+	await _units_act(cur)
+	if game_over:
+		return
+	if p.hp <= 0:
+		await _respawn(p)
+	if not p.bonus_done:
+		p.bonus_done = true
+		await _bonus_cards(p)
 	hud.set_phase("roll")
 	hud.refresh()
 
@@ -647,11 +680,59 @@ func roll(die: String) -> void:
 		return
 	var p: Dictionary = players[cur]
 	p.die = die
+	var res := _compute_roll(p, die)
+	var face: int = res[0]
+	var steps: int = res[1]
+	var notes: Array = res[2]
+	busy = true
+	hud.set_phase("busy")
+	await hud.animate_roll(die, face, steps, " ".join(notes))
+	busy = false
+	rolled = true
+	steps_left = steps
+	hud.set_phase("act")
+	_recalc()
+	hud.refresh()
+
+func can_reroll() -> bool:
+	var p: Dictionary = players[cur]
+	return rolled and p.ability == "lucky" and not p.rerolled and not p.moved and not busy
+
+## Везунчик: раз за ход перебросить кубик, пока не сделал ни шага.
+func reroll() -> void:
+	if not can_reroll():
+		return
+	var p: Dictionary = players[cur]
+	p.rerolled = true
+	rolled = false
+	_clear_highlight()
+	var res := _compute_roll(p, p.die)
+	busy = true
+	hud.set_phase("busy")
+	await hud.animate_roll(p.die, res[0], res[1], "Переброс! " + " ".join(res[2]))
+	busy = false
+	rolled = true
+	steps_left = res[1]
+	hud.set_phase("act")
+	_recalc()
+	hud.refresh()
+
+func _compute_roll(p: Dictionary, die: String) -> Array:
 	var faces: Array = DB.die_faces(die)
 	var i := rng.randi_range(0, faces.size() - 1)
 	var face := i + 1
 	var steps := int(round(int(faces[i]) * float(p.step_mult)))
 	var notes: Array = []
+	if p.ability == "feet":
+		steps += 1
+		notes.append("Быстрые ноги: +1")
+	var pigs := 0
+	for u in units:
+		if u["sid"] == "pig" and is_enemy(cur, u["owner"]) and _cheb(u["pos"], p.pos) <= 2:
+			pigs += 1
+	if pigs > 0:
+		steps = maxi(0, steps - mini(pigs, 2))
+		notes.append("Свинья мешает идти: −%d" % mini(pigs, 2))
 	if die == "D20" and face == 20:
 		notes.append("Критическая удача! Находка: " + _give_loot(p))
 	elif die == "D20" and face == 1:
@@ -662,15 +743,7 @@ func roll(die: String) -> void:
 	if p.now_skip_move:
 		steps = 0
 		notes.append("Ты застрял в ловушке и не можешь идти")
-	busy = true
-	hud.set_phase("busy")
-	await hud.animate_roll(die, face, steps, " ".join(notes))
-	busy = false
-	rolled = true
-	steps_left = steps
-	hud.set_phase("act")
-	_recalc()
-	hud.refresh()
+	return [face, steps, notes]
 
 func end_turn() -> void:
 	if busy or game_over:
@@ -818,6 +891,8 @@ func vision(p: Dictionary) -> int:
 		r -= 1
 	if p.items.has("torch"):
 		r += 1
+	if p.ability == "eye":
+		r += 1
 	if p.pet:
 		r += 1
 	return maxi(1, r)
@@ -879,6 +954,16 @@ func refresh_view() -> void:
 	for bt in info["bridge_nodes"]:
 		var bd := maxi(absi(bt.x - p.pos.x), absi(bt.y - p.pos.y))
 		info["bridge_nodes"][bt].visible = p.explored.has(bt) or bd <= r + 2
+	if p.ability == "seeker":
+		for t in objects:
+			if objects[t]["type"] == "shard" and _cheb(t, p.pos) <= r + 3 and not p.explored.has(t):
+				p.explored[t] = true
+				p.discovered[t] = true
+				if not p.get("seeker_told", {}).has(t):
+					var told: Dictionary = p.get("seeker_told", {})
+					told[t] = true
+					p["seeker_told"] = told
+					hud.toast("Чутьё на кристаллы: рядом сияет осколок!", Style.TEAL, 2.5)
 	for t in objects:
 		var o: Dictionary = objects[t]
 		if o["type"] in ["beast", "shard"] and team_sees(t):
@@ -891,6 +976,8 @@ func refresh_view() -> void:
 		q.node.get_node("Ring").visible = i == cur
 	for tr in traps:
 		tr["node"].visible = not is_enemy(cur, tr["owner"])
+	for u in units:
+		u["node"].visible = not is_enemy(cur, u["owner"]) or team_sees(u["pos"])
 	_update_lights()
 
 func _tint(base: Color, k: float, dark: bool) -> Color:
@@ -995,6 +1082,9 @@ func _recalc() -> void:
 			var opp := _enemy_at(n, cur)
 			if opp >= 0 and team_sees(n):
 				blocked = true
+			var un = _unit_at(n)
+			if un != null and is_enemy(cur, un["owner"]) and not _untouchable(un) and team_sees(n):
+				blocked = true
 			if map.get_t(n) == MapGen.SHRINE and team_shards(p) < 3:
 				blocked = true
 			if blocked:
@@ -1003,8 +1093,12 @@ func _recalc() -> void:
 				targets.erase(n)
 				open.append(n)
 	dist.erase(p.pos)
-	# на клетке союзника можно пройти, но не остановиться
+	# на клетке союзника (и своего зверя) можно пройти, но не остановиться
 	for t in dist.keys():
+		var u2 = _unit_at(t)
+		if u2 != null and not (is_enemy(cur, u2["owner"]) and not _untouchable(u2)):
+			dist.erase(t)
+			continue
 		for j in players.size():
 			if j != cur and not is_enemy(cur, j) and players[j].pos == t:
 				dist.erase(t)
@@ -1065,6 +1159,7 @@ func _walk(path: Array) -> void:
 	hud.set_phase("busy")
 	_clear_highlight()
 	var p: Dictionary = players[cur]
+	p.moved = true
 	follow = p.node
 	for step in path:
 		var tile: Vector2i = step
@@ -1081,6 +1176,12 @@ func _walk(path: Array) -> void:
 			_face(p, tile)
 			steps_left -= c
 			await _fight_beast(p, tile, o)
+			break
+		var eu = _unit_at(tile)
+		if eu != null and is_enemy(cur, eu["owner"]) and not _untouchable(eu):
+			_face(p, tile)
+			steps_left -= c
+			await _fight_unit(p, eu)
 			break
 		var opp := _enemy_at(tile, cur)
 		if opp >= 0:
@@ -1205,7 +1306,11 @@ func _remove_object(t: Vector2i) -> void:
 # ================================================================= ДОБЫЧА И СОБЫТИЯ
 func _give_loot(p: Dictionary) -> String:
 	var r := rng.randf()
-	if r < 0.45:
+	if r < 0.14:
+		var si := rng.randi_range(0, DB.summons.size() - 1)
+		p.summons.append(si)
+		return "карта призыва «%s»" % DB.summons[si]["name"]
+	if r < 0.5:
 		var c := DB.random_trap(rng)
 		p.hand.append(c)
 		return "карта ловушки «%s»" % DB.traps[c]["name"]
@@ -1303,6 +1408,12 @@ func use_item(idx: int) -> void:
 	hud.refresh()
 
 # ================================================================= ЛОВУШКИ
+func trap_cost(card: int) -> int:
+	var c := DB.trap_price(card)
+	if players[cur].ability == "trapper":
+		c = maxi(1, c - 1)
+	return c
+
 func start_trap_mode(hand_idx: int) -> void:
 	if busy or game_over:
 		return
@@ -1314,7 +1425,7 @@ func start_trap_mode(hand_idx: int) -> void:
 		hud.toast("Сначала брось кубик: ловушка стоит шагов", Style.GOLD)
 		return
 	var card: int = p.hand[hand_idx]
-	var price := DB.trap_price(card)
+	var price := trap_cost(card)
 	if steps_left < price:
 		hud.toast("Нужно %d шага, а осталось %d" % [price, steps_left], Style.RED)
 		return
@@ -1341,7 +1452,8 @@ func _place_trap(t: Vector2i) -> void:
 	var p: Dictionary = players[cur]
 	var card: int = p.hand[pending_card]
 	p.hand.remove_at(pending_card)
-	steps_left -= DB.trap_price(card)
+	steps_left -= trap_cost(card)
+	p.moved = true
 	var n := Models.trap_marker()
 	n.position = map.world_pos(t)
 	entities.add_child(n)
@@ -1388,6 +1500,7 @@ func _trigger_trap(tr: Dictionary, p: Dictionary) -> void:
 		p.block_traps += 1
 		lines.append("в следующий ход нельзя ставить ловушки")
 	if fx.has("block_summon"):
+		p.block_summon += 1
 		lines.append("в следующий ход нельзя призывать животных")
 	if fx.has("vuln"):
 		p.vuln += int(fx["vuln"])
@@ -1455,7 +1568,7 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 	var info := "Сила: %d • Урон: %d" % [power, int(def["dmg"])]
 	if int(o["hits"]) > 1:
 		info += " • Нужно ударов: %d" % int(o["hits"])
-	var res: Dictionary = await hud.battle(p.name, def["name"], info, "Чтобы победить, нужно набрать %d или больше" % power, false, p.color)
+	var res: Dictionary = await hud.battle(p.name, def["name"], info, "Чтобы победить, нужно набрать %d или больше" % power, false, p.color, p.ability == "agile")
 	var win: bool = int(res["total"]) >= power
 	var txt := ""
 	if win:
@@ -1497,7 +1610,7 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 	_face_node(q.node, p.node.position)
 	_begin_fight(p.node, q.node)
 	var forest: bool = map.get_t(q.pos) == MapGen.FOREST
-	var r: Dictionary = await hud.battle(p.name, q.name, "Потом %s сам бросит кубик" % q.name + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true, p.color)
+	var r: Dictionary = await hud.battle(p.name, q.name, "Потом %s сам бросит кубик" % q.name + (" (+1, он в лесу)" if forest else ""), "Побеждает тот, у кого больше", true, p.color, p.ability == "agile")
 	var a := int(r["total"])
 	var d: int = await hud.extra_roll(q.name, q.color, 1 if forest else 0)
 	var res := "Ничья: %d против %d. Оба −1 HP" % [a, d]
@@ -1507,6 +1620,9 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 		res = "%s отбивается: %d против %d. −2 HP" % [q.name, d, a]
 	await hud.battle_finish(res, a > d)
 	_end_fight()
+	if a > d and _has_unit(cur, "bear"):
+		p.items.append("honey")
+		hud.toast("Легендарный медведь доволен победой: банка мёда!", Style.GOLD, 3.0)
 	if a > d:
 		var dmg := int(round(2 * float(p.dmg_mult))) + 2 * int(p.wolves) + (1 if q.vuln > 0 else 0)
 		_damage(q, dmg)
@@ -1688,6 +1804,317 @@ func _respawn(p: Dictionary) -> void:
 	p.node.position = map.world_pos(cf)
 	refresh_view()
 
+# ================================================================= ПРИЗЫВЫ
+func _cheb(a: Vector2i, b: Vector2i) -> int:
+	return maxi(absi(a.x - b.x), absi(a.y - b.y))
+
+func _unit_at(t: Vector2i):
+	for u in units:
+		if u["pos"] == t:
+			return u
+	return null
+
+func _has_unit(owner: int, sid: String) -> bool:
+	for u in units:
+		if u["owner"] == owner and u["sid"] == sid:
+			return true
+	return false
+
+## Хомячок прячется, попугай летает — героем их не достать.
+func _untouchable(u: Dictionary) -> bool:
+	return u["sid"] in ["hamster", "parrot"]
+
+func summon_cost(si: int) -> int:
+	var c := int(DB.summons[si].get("cost", 4))
+	if players[cur].ability == "beast":
+		c = maxi(1, c - 1)
+	return c
+
+func _tile_free_for_unit(t: Vector2i) -> bool:
+	if not map.passable(t) or map.get_t(t) == MapGen.SHRINE:
+		return false
+	var o = objects.get(t)
+	if o != null and o["type"] != "campfire":
+		return false
+	if _unit_at(t) != null:
+		return false
+	for q in players:
+		if q.pos == t:
+			return false
+	return true
+
+func start_summon_mode(hand_idx: int) -> void:
+	if busy or game_over:
+		return
+	var p: Dictionary = players[cur]
+	if p.now_block_summon:
+		hud.toast("«Глушитель»: в этот ход призывать нельзя", Style.RED, 3.0)
+		return
+	if not rolled:
+		hud.toast("Сначала брось кубик: призыв стоит шагов", Style.GOLD)
+		return
+	var si: int = p.summons[hand_idx]
+	var cost := summon_cost(si)
+	if steps_left < cost:
+		hud.toast("Нужно %d шагов, а осталось %d" % [cost, steps_left], Style.RED)
+		return
+	pending_summon = hand_idx
+	mode = "summon"
+	summon_targets.clear()
+	var items: Array = []
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var t: Vector2i = p.pos + Vector2i(dx, dz)
+			if t != p.pos and _tile_free_for_unit(t):
+				summon_targets[t] = true
+				items.append([t, Color(0.3, 1.0, 0.5, 0.6)])
+	_set_highlight(items)
+	hud.set_phase("trap")
+	hud.toast("Нажми на зелёную клетку рядом, чтобы призвать: %s" % DB.summons[si]["name"], Style.GREEN, 3.0)
+
+func _place_summon(t: Vector2i) -> void:
+	var p: Dictionary = players[cur]
+	var si: int = p.summons[pending_summon]
+	p.summons.remove_at(pending_summon)
+	steps_left -= summon_cost(si)
+	p.moved = true
+	_spawn_unit(cur, si, t)
+	mode = "move"
+	hud.set_phase("act")
+	_recalc()
+	hud.refresh()
+
+func _spawn_unit(owner: int, si: int, t: Vector2i) -> void:
+	var def: Dictionary = DB.summons[si]
+	var sid: String = def["id"]
+	var n := Models.summon_model(sid)
+	n.position = map.world_pos(t)
+	entities.add_child(n)
+	var tag := Label3D.new()
+	tag.font = Style.font_bold
+	tag.font_size = 34
+	tag.outline_size = 10
+	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	tag.no_depth_test = true
+	tag.pixel_size = 0.004
+	tag.position = Vector3(0, 0.9, 0)
+	tag.modulate = players[owner].color.lightened(0.35)
+	n.add_child(tag)
+	var u := {"owner": owner, "sid": sid, "idx": si, "pos": t, "hp": int(def["hp"]), "max_hp": int(def["hp"]),
+		"dmg": int(def.get("dmg", 1)), "node": n, "tag": tag, "life": 5, "name": def["name"]}
+	units.append(u)
+	_update_unit_tag(u)
+	if sid == "wolf":
+		players[owner].wolves += 1
+	n.scale = n.scale * 0.1
+	var tw := create_tween()
+	tw.tween_property(n, "scale", n.scale * 10.0, 0.35).set_trans(Tween.TRANS_BACK)
+	Settings.play("magic")
+	_float_text(n, "Призыв!", Style.GREEN)
+	refresh_view()
+
+func _update_unit_tag(u: Dictionary) -> void:
+	u["tag"].text = "%s %d HP" % [u["name"], u["hp"]]
+
+func _remove_unit(u: Dictionary, why: String) -> void:
+	units.erase(u)
+	if u["sid"] == "wolf":
+		players[u["owner"]].wolves = maxi(0, players[u["owner"]].wolves - 1)
+	var n: Node3D = u["node"]
+	var tw := create_tween()
+	tw.tween_property(n, "scale", Vector3.ONE * 0.01, 0.4)
+	tw.tween_callback(n.queue_free)
+	if why != "":
+		hud.toast(why, Style.GOLD, 3.0)
+
+func _nearest_enemy(u: Dictionary, max_d: int) -> int:
+	var best := -1
+	var bd := 9999
+	for j in players.size():
+		if not is_enemy(u["owner"], j):
+			continue
+		var d := _cheb(players[j].pos, u["pos"])
+		if d <= max_d and d < bd:
+			bd = d
+			best = j
+	return best
+
+func _unit_move(u: Dictionary, target: Vector2i, max_steps: int, stop_d: int, away := false) -> void:
+	for k in max_steps:
+		var d0 := _cheb(u["pos"], target)
+		if not away and d0 <= stop_d:
+			return
+		var best := Vector2i(-999, -999)
+		var bd := d0
+		for dd in DIRS:
+			var nt: Vector2i = u["pos"] + dd
+			if not _tile_free_for_unit(nt):
+				continue
+			var nd := _cheb(nt, target)
+			if (not away and nd < bd) or (away and nd > bd):
+				bd = nd
+				best = nt
+		if best.x == -999:
+			return
+		var n: Node3D = u["node"]
+		var a := n.position
+		var b: Vector3 = map.world_pos(best)
+		var dv: Vector2i = best - u["pos"]
+		n.rotation.y = atan2(float(dv.x), float(dv.y))
+		u["pos"] = best
+		var tw := create_tween()
+		tw.tween_method(func(kk: float): n.position = a.lerp(b, kk) + Vector3(0, sin(kk * PI) * 0.12, 0), 0.0, 1.0, 0.2)
+		await tw.finished
+
+func _unit_hit(u: Dictionary, victim_i: int, dmg: int, verb: String) -> void:
+	var v: Dictionary = players[victim_i]
+	var n: Node3D = u["node"]
+	var home := n.position
+	var to: Vector3 = v.node.position
+	n.rotation.y = atan2(to.x - home.x, to.z - home.z)
+	var tw := create_tween()
+	tw.tween_property(n, "position", home.lerp(to, 0.4), 0.12)
+	tw.tween_property(n, "position", home, 0.18)
+	await tw.finished
+	Settings.play("hit")
+	_damage(v, dmg)
+	var owner: Dictionary = players[u["owner"]]
+	v.reports.append("%s игрока %s %s тебя (−%d HP)." % [u["name"], owner.name, verb, dmg])
+	hud.toast("%s %s героя %s: −%d HP" % [u["name"], verb, v.name, dmg], owner.color.lightened(0.3), 2.5)
+	if v.hp <= 0 and victim_i != cur:
+		await _respawn(v)
+
+## Призванные звери действуют сами в начале хода хозяина.
+func _units_act(owner: int) -> void:
+	var mine: Array = []
+	for u in units:
+		if u["owner"] == owner:
+			mine.append(u)
+	if mine.is_empty():
+		return
+	var p: Dictionary = players[owner]
+	for u in mine:
+		if not units.has(u):
+			continue
+		var sid: String = u["sid"]
+		match sid:
+			"dog", "cat", "bear":
+				var rng_d: int = {"dog": 7, "cat": 5, "bear": 8}[sid]
+				var steps: int = {"dog": 3, "cat": 2, "bear": 1}[sid]
+				var e := _nearest_enemy(u, rng_d)
+				if e >= 0:
+					await _unit_move(u, players[e].pos, steps, 1)
+					if _cheb(u["pos"], players[e].pos) <= 1:
+						await _unit_hit(u, e, u["dmg"], "укусил" if sid != "bear" else "ударил")
+				elif _cheb(u["pos"], p.pos) > 2:
+					await _unit_move(u, p.pos, steps, 1)
+			"parrot":
+				var e2 := _nearest_enemy(u, 6)
+				if e2 >= 0:
+					await _unit_move(u, players[e2].pos, 2, 2)
+					if _cheb(u["pos"], players[e2].pos) <= 2:
+						await _unit_hit(u, e2, u["dmg"], "клюнул")
+				elif _cheb(u["pos"], p.pos) > 2:
+					await _unit_move(u, p.pos, 2, 1)
+			"hamster":
+				var e3 := _nearest_enemy(u, 3)
+				if e3 >= 0:
+					await _unit_hit(u, e3, u["dmg"], "куснул")
+			"fox":
+				var e4 := _nearest_enemy(u, 4)
+				if e4 >= 0:
+					await _unit_move(u, players[e4].pos, 2, 1)
+					if _cheb(u["pos"], players[e4].pos) <= 1:
+						await _unit_hit(u, e4, u["dmg"], "цапнула")
+						await _unit_move(u, players[e4].pos, 2, 0, true)
+			"pig":
+				if _cheb(u["pos"], p.pos) > 3:
+					await _unit_move(u, p.pos, 2, 2)
+			"cow":
+				if _cheb(u["pos"], p.pos) > 1:
+					await _unit_move(u, p.pos, 2, 1)
+				if _cheb(u["pos"], p.pos) <= 2 and p.hp < p.max_hp:
+					p.hp = mini(p.max_hp, p.hp + 1)
+					_float_text(p.node, "+1 HP", Style.GREEN)
+					hud.toast("Корова подлечила хозяина: +1 HP", Style.GREEN, 2.0)
+			"chicken":
+				var e5 := _nearest_enemy(u, 4)
+				if e5 >= 0:
+					await _unit_hit(u, e5, u["dmg"], "попала яйцом в")
+				elif _cheb(u["pos"], p.pos) <= 1 and p.hp < p.max_hp:
+					p.hp = mini(p.max_hp, p.hp + 2)
+					_float_text(p.node, "+2 HP", Style.GREEN)
+				else:
+					await _unit_move(u, p.pos, 2, 1)
+			"wolf":
+				if _cheb(u["pos"], p.pos) > 1:
+					await _unit_move(u, p.pos, 3, 1)
+		u["life"] -= 1
+		if u["life"] <= 0 and units.has(u):
+			_remove_unit(u, "%s убежал домой — призыв закончился." % u["name"])
+	refresh_view()
+	hud.refresh()
+
+func _fight_unit(p: Dictionary, u: Dictionary) -> void:
+	_stop_walk(p)
+	var n: Node3D = u["node"]
+	_begin_fight(p.node, n)
+	var owner: Dictionary = players[u["owner"]]
+	var res: Dictionary = await hud.battle(p.name, "%s (%s)" % [u["name"], owner.name], "Здоровье: %d • Сила 3" % u["hp"], "Чтобы ударить, нужно набрать 3 или больше", false, p.color, p.ability == "agile")
+	var win: bool = int(res["total"]) >= 3
+	var txt := ""
+	var dmg := int(round(2 * float(p.dmg_mult))) + 2 * int(p.wolves)
+	if win:
+		txt = "Удар! %s теряет %d HP." % [u["name"], dmg]
+	else:
+		txt = "Промах... %s кусает в ответ: −%d HP" % [u["name"], maxi(1, u["dmg"])]
+	await hud.battle_finish(txt, win)
+	_end_fight()
+	if win:
+		u["hp"] -= dmg
+		_float_text(n, "−%d" % dmg, Style.RED)
+		if u["hp"] <= 0:
+			owner.reports.append("Героя %s прогнал твоего зверя: %s." % [p.name, u["name"]])
+			_remove_unit(u, "%s убегает!" % u["name"])
+		else:
+			_update_unit_tag(u)
+	else:
+		_damage(p, maxi(1, u["dmg"]))
+
+# ================================================================= БОНУСНЫЕ КАРТЫ
+func _bonus_card(p: Dictionary) -> Dictionary:
+	var r := rng.randf()
+	if r < 0.35:
+		var c := DB.random_trap(rng)
+		return {"kind": "trap", "id": c, "title": DB.traps[c]["name"], "text": DB.traps[c]["text"]}
+	if r < 0.62:
+		var si := rng.randi_range(0, DB.summons.size() - 1)
+		return {"kind": "summon", "id": si, "title": DB.summons[si]["name"], "text": DB.summons[si]["text"]}
+	var keys := ["potion", "potion", "boots", "torch", "meat", "meat", "honey"]
+	var k: String = keys[rng.randi() % keys.size()]
+	return {"kind": "item", "id": k, "title": DB.items[k]["name"], "text": DB.items[k]["text"]}
+
+## Первый ход: 5 карт рубашкой вверх, открыть можно 2.
+func _bonus_cards(p: Dictionary) -> void:
+	var cards: Array = []
+	for k in 5:
+		cards.append(_bonus_card(p))
+	var chosen: Array = await hud.bonus_pick(p.name, cards)
+	var got: Array = []
+	for ci in chosen:
+		var c: Dictionary = cards[ci]
+		match c["kind"]:
+			"trap":
+				p.hand.append(c["id"])
+			"summon":
+				p.summons.append(c["id"])
+			"item":
+				p.items.append(c["id"])
+		got.append(c["title"])
+	if not got.is_empty():
+		hud.toast("Бонусные карты: " + ", ".join(got), Style.GOLD, 3.5)
+	hud.refresh()
+
 # ================================================================= ПРИРУЧЕНИЕ
 func _on_long_press(sp: Vector2) -> void:
 	if busy or game_over or mode != "move":
@@ -1711,7 +2138,7 @@ func _on_long_press(sp: Vector2) -> void:
 	var can_tame := false
 	match o["kind"]:
 		"wolf":
-			var need := 2 if p.wolves == 0 else 1
+			var need := 2 if p.wolves == 0 and p.ability != "beast" else 1
 			tame_txt = "Приручить — %d мяса (есть %d)" % [need, p.items.count("meat")]
 			can_tame = p.items.count("meat") >= need
 		"bear":
@@ -1743,7 +2170,7 @@ func _on_long_press(sp: Vector2) -> void:
 func _tame(p: Dictionary, t: Vector2i, o: Dictionary) -> void:
 	var kind: String = o["kind"]
 	if kind == "wolf":
-		var need := 2 if p.wolves == 0 else 1
+		var need := 2 if p.wolves == 0 and p.ability != "beast" else 1
 		for k in need:
 			p.items.erase("meat")
 	else:

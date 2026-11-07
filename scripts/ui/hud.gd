@@ -13,6 +13,8 @@ signal menu_requested
 signal restart_requested
 signal settings_requested
 signal view_toggle_requested
+signal summon_chosen(idx: int)
+signal reroll_requested
 signal _alert_closed
 signal battle_event(kind: String)
 
@@ -53,9 +55,13 @@ var view_btn: Button
 var confirm_bar: PanelContainer
 var current_qte = null
 var sub_lbl: Label
+var summon_btn: Button
+var reroll_btn: Button
+var ability_lbl: Label
 
 func _ready() -> void:
 	layer = 5
+	fast = DB.get_meta("fast", false)
 	root = Control.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -144,6 +150,8 @@ func _build_hero_panel() -> void:
 	info_lbl = Style.label("", 15, Color(Style.PARCH, 0.85))
 	info_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	h2.add_child(info_lbl)
+	ability_lbl = Style.label("", 14, Color(Style.TEAL, 0.9))
+	v.add_child(ability_lbl)
 	status_lbl = Style.label("", 15, Color("ffb070"), Style.font_bold)
 	v.add_child(status_lbl)
 
@@ -224,9 +232,17 @@ func _build_bottom() -> void:
 	trap_btn = Style.button("Ловушки", 22)
 	trap_btn.pressed.connect(_show_traps)
 	act_box.add_child(trap_btn)
+	summon_btn = Style.button("Призывы", 22)
+	summon_btn.pressed.connect(_show_summons)
+	act_box.add_child(summon_btn)
 	bag_btn = Style.button("Сумка", 22)
 	bag_btn.pressed.connect(_show_bag)
 	act_box.add_child(bag_btn)
+	reroll_btn = Style.button("Перебросить", 20)
+	reroll_btn.tooltip_text = "Везунчик: раз за ход можно перебросить кубик, пока не сделал шаг"
+	reroll_btn.add_theme_stylebox_override("normal", Style.sb(Color("2f4f6a"), Style.TEAL, 2, 12, 10))
+	reroll_btn.pressed.connect(func(): reroll_requested.emit())
+	act_box.add_child(reroll_btn)
 	var eb := Style.button("Закончить ход", 24)
 	eb.add_theme_stylebox_override("normal", Style.sb(Color("2f5a3a"), Style.GOLD, 2, 12, 10))
 	eb.add_theme_stylebox_override("hover", Style.sb(Color("3d7049"), Color.WHITE, 2, 12, 10))
@@ -235,7 +251,7 @@ func _build_bottom() -> void:
 	trap_box = HBoxContainer.new()
 	trap_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	stack.add_child(trap_box)
-	trap_box.add_child(Style.label("Выбери клетку для ловушки", 22, Color("e0a0ff"), Style.font_bold))
+	trap_box.add_child(Style.label("Выбери подсвеченную клетку рядом с героем", 22, Color("e0a0ff"), Style.font_bold))
 	var cb := Style.button("Отмена", 22)
 	cb.pressed.connect(func(): cancel_mode.emit())
 	trap_box.add_child(cb)
@@ -311,6 +327,11 @@ func refresh() -> void:
 	view_btn.text = "Вид: 1-е лицо" if game.view_first else "Вид: 3-е лицо"
 	trap_btn.text = "Ловушки (%d)" % p.hand.size()
 	bag_btn.text = "Сумка (%d)" % p.items.size()
+	summon_btn.text = "Призывы (%d)" % p.summons.size()
+	reroll_btn.visible = game.can_reroll()
+	for a in DB.ABILITIES:
+		if a["id"] == p.ability:
+			ability_lbl.text = "Способность: " + a["name"]
 
 # ------------------------------------------------------------ сообщения
 func toast(text: String, col: Color = Style.PARCH, dur: float = 3.0) -> void:
@@ -454,7 +475,7 @@ class QTE extends Control:
 	## Кольцо пульсирует: сходится и расходится. Нажми, когда оно совпадёт с щитом (станет зелёным).
 	signal done(ok: bool)
 	const R0 := 38.0
-	const TOL := 11.0
+	var tol := 11.0
 	const AMP := 52.0
 	const PERIOD := 0.8
 	const PREP := 1.4
@@ -494,7 +515,7 @@ class QTE extends Control:
 	func press() -> void:
 		if finished or not started:
 			return
-		_finish(absf(ring_r() - R0) <= TOL)
+		_finish(absf(ring_r() - R0) <= tol)
 
 	func _finish(v: bool) -> void:
 		finished = true
@@ -504,7 +525,7 @@ class QTE extends Control:
 
 	func _draw() -> void:
 		var c := size * 0.5
-		draw_circle(c, R0 + TOL, Color(0.4, 0.9, 0.5, 0.12))
+		draw_circle(c, R0 + tol, Color(0.4, 0.9, 0.5, 0.12))
 		draw_arc(c, R0, 0, TAU, 64, Color("e8c36a"), 4.0, true)
 		draw_circle(c, R0 - 9, Color("8a5a2b"))
 		draw_arc(c, R0 - 9, 0, TAU, 48, Color("5a3a1a"), 4.0, true)
@@ -516,17 +537,17 @@ class QTE extends Control:
 			draw_arc(c, ring_r(), 0, TAU, 64, Color(1, 0.4, 0.35, 0.5), 4.0, true)
 		elif not finished:
 			var rr := ring_r()
-			var near := absf(rr - R0) <= TOL
+			var near := absf(rr - R0) <= tol
 			draw_arc(c, rr, 0, TAU, 64, Color("6fd07a") if near else Color("ff6a5a"), 6.0, true)
 		else:
 			draw_arc(c, R0 + 8, 0, TAU, 64, Color("6fd07a") if ok else Color("ff6a5a"), 10.0, true)
 
 ## Бой в 2 шага: защита (кольцо) → свой бросок кубика. Возвращает {blocked, bonus, roll, total}.
-func battle(hero_name: String, foe_name: String, foe_info: String, need_text: String, pvp: bool, hero_col: Color = Style.GOLD) -> Dictionary:
+func battle(hero_name: String, foe_name: String, foe_info: String, need_text: String, pvp: bool, hero_col: Color = Style.GOLD, agile := false) -> Dictionary:
 	if fast:
 		var bl := randf() < 0.5
 		var r := randi_range(1, 6)
-		var bn := 2 if bl else -1
+		var bn := (3 if agile else 2) if bl else -1
 		await get_tree().process_frame
 		return {"blocked": bl, "bonus": bn, "roll": r, "total": maxi(1, r + bn)}
 	for c in alert_panel.get_children():
@@ -549,6 +570,8 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 	var center := CenterContainer.new()
 	v.add_child(center)
 	var qte := QTE.new()
+	if agile:
+		qte.tol = 17.0
 	center.add_child(qte)
 	current_qte = qte
 	bottom.visible = false
@@ -561,8 +584,8 @@ func battle(hero_name: String, foe_name: String, foe_info: String, need_text: St
 	var blocked: bool = await qte.done
 	current_qte = null
 	battle_event.emit("block" if blocked else "hit")
-	var bonus := 2 if blocked else -1
-	hint.text = ("Блок! Следующий бросок +2" if blocked else "Не успел... Следующий бросок −1")
+	var bonus := (3 if agile else 2) if blocked else -1
+	hint.text = ("Блок! Следующий бросок +%d" % bonus if blocked else "Не успел... Следующий бросок −1")
 	hint.add_theme_color_override("font_color", Style.GREEN if blocked else Style.RED)
 	await get_tree().create_timer(0.9).timeout
 	center.queue_free()
@@ -717,7 +740,7 @@ func show_pass(p: Dictionary, reports: Array) -> void:
 		t.add_theme_color_override("font_color", DB.TEAM_COLORS[p.team].lightened(0.3))
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(t)
-	var s := Style.label("Остальные — не подглядывайте!", 22, Color(Style.GOLD, 0.8))
+	var s := Style.label("Остальные — не подглядывайте!   •   Карта № %d" % game.map_code, 22, Color(Style.GOLD, 0.8))
 	s.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(s)
 	if not reports.is_empty():
@@ -780,7 +803,7 @@ func _show_traps() -> void:
 	var cols := {"Атака": Color("ff8a7a"), "Передвижение": Color("8ad0ff"), "Особая": Color("e0a0ff"), "Редкая": Color("ffd76a")}
 	for i in p.hand.size():
 		var card: Dictionary = DB.traps[p.hand[i]]
-		var price := DB.trap_price(p.hand[i])
+		var price: int = game.trap_cost(p.hand[i])
 		var b := Style.button("%s  [%s]\n%s   •   цена: %d шага" % [card["name"], card["type"], card["text"], price], 20)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.add_theme_color_override("font_color", cols.get(card["type"], Style.PARCH))
@@ -791,6 +814,133 @@ func _show_traps() -> void:
 		list.add_child(b)
 	if not game.rolled:
 		list.add_child(Style.label("Сначала брось кубик — ловушки стоят шагов.", 19, Style.GOLD))
+
+func _show_summons() -> void:
+	var p: Dictionary = game.current()
+	var list := _open_popup("Призывы зверей")
+	if p.summons.is_empty():
+		list.add_child(Style.label("Карт призыва нет. Ищи их в сундуках и бонусных картах!", 21))
+	for i in p.summons.size():
+		var sd: Dictionary = DB.summons[p.summons[i]]
+		var cost: int = game.summon_cost(p.summons[i])
+		var b := Style.button("%s  (%d HP)\n%s   •   цена: %d шаг." % [sd["name"], int(sd["hp"]), sd["text"], cost], 18)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		b.custom_minimum_size.x = 540
+		b.add_theme_color_override("font_color", Color("9be07a"))
+		b.disabled = game.steps_left < cost or not game.rolled or p.now_block_summon
+		b.pressed.connect(func():
+			_close_popup()
+			summon_chosen.emit(i))
+		list.add_child(b)
+	if not game.rolled:
+		list.add_child(Style.label("Сначала брось кубик — призыв стоит шагов.", 19, Style.GOLD))
+	elif p.now_block_summon:
+		list.add_child(Style.label("«Глушитель»: в этот ход призывать нельзя.", 19, Style.RED))
+
+const KIND_COL := {"trap": Color("c0392b"), "summon": Color("2e8b57"), "item": Color("b8860b")}
+const KIND_NAME := {"trap": "Ловушка", "summon": "Призыв", "item": "Предмет"}
+
+## 5 карт рубашкой вверх: открыть 2, остальные потом переворачиваются.
+func bonus_pick(who: String, cards: Array) -> Array:
+	if fast:
+		await get_tree().process_frame
+		return [0, 1]
+	for c in alert_panel.get_children():
+		c.free()
+	alert_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, Style.GOLD, 2, 18, 18))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	alert_panel.add_child(v)
+	v.add_child(_wrap_label("%s, бонусные карты!" % who, 32, Style.GOLD, 860, Style.font_title))
+	var hint := _wrap_label("Открой любые 2 из 5 — их заберёшь. Остальные покажем потом.", 20, Style.PARCH, 860)
+	v.add_child(hint)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	v.add_child(row)
+	var chosen: Array = []
+	var slots: Array = []
+	for i in cards.size():
+		var card := Button.new()
+		card.custom_minimum_size = Vector2(150, 210)
+		card.focus_mode = Control.FOCUS_NONE
+		card.add_theme_stylebox_override("normal", Style.sb(Color("3a2414"), Style.GOLD, 3, 14, 8))
+		card.add_theme_stylebox_override("hover", Style.sb(Color("553620"), Color.WHITE, 3, 14, 8))
+		card.add_theme_stylebox_override("pressed", Style.sb(Color("553620"), Color.WHITE, 3, 14, 8))
+		card.add_theme_stylebox_override("disabled", Style.sb(Color("3a2414"), Color(Style.GOLD, 0.5), 3, 14, 8))
+		card.text = "?"
+		card.add_theme_font_override("font", Style.font_title)
+		card.add_theme_font_size_override("font_size", 80)
+		card.add_theme_color_override("font_color", Color(Style.GOLD, 0.8))
+		card.pivot_offset = card.custom_minimum_size * 0.5
+		row.add_child(card)
+		slots.append(card)
+		card.pressed.connect(func():
+			if chosen.size() >= 2 or chosen.has(i):
+				return
+			chosen.append(i)
+			Settings.play("click", 0.0)
+			_flip(card, cards[i], false))
+	var done := Style.button("Забрать карты", 26, 260)
+	done.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	done.visible = false
+	var fin := [false]
+	done.pressed.connect(func(): fin[0] = true)
+	v.add_child(done)
+	alert_panel.visible = true
+	alert_panel.modulate.a = 1.0
+	_show_modal(0.45)
+	await _place_center(alert_panel, 900)
+	while chosen.size() < 2:
+		await get_tree().process_frame
+	await get_tree().create_timer(0.9).timeout
+	for i in cards.size():
+		if not chosen.has(i):
+			slots[i].disabled = true
+			_flip(slots[i], cards[i], true)
+			await get_tree().create_timer(0.15).timeout
+	hint.text = "Твои карты — с золотой рамкой. Тусклые — те, что остались неоткрытыми."
+	done.visible = true
+	await _place_center(alert_panel, 900)
+	while not fin[0]:
+		await get_tree().process_frame
+	alert_panel.visible = false
+	_hide_modal()
+	return chosen
+
+func _flip(card: Button, c: Dictionary, missed: bool) -> void:
+	var tw := create_tween()
+	tw.tween_property(card, "scale:x", 0.02, 0.14)
+	tw.tween_callback(func():
+		card.text = ""
+		var col: Color = KIND_COL[c["kind"]]
+		card.add_theme_stylebox_override("normal", Style.sb(col.darkened(0.45), Color(Style.GOLD, 0.35) if missed else Style.GOLD, 2 if missed else 4, 14, 8))
+		card.add_theme_stylebox_override("disabled", Style.sb(col.darkened(0.6), Color(Style.GOLD, 0.25), 2, 14, 8))
+		var vb := VBoxContainer.new()
+		vb.set_anchors_preset(Control.PRESET_FULL_RECT)
+		vb.offset_left = 8
+		vb.offset_right = -8
+		vb.offset_top = 8
+		vb.offset_bottom = -8
+		vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.add_child(vb)
+		var k := Style.label(KIND_NAME[c["kind"]], 15, col.lightened(0.5), Style.font_bold)
+		k.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vb.add_child(k)
+		var t := Style.label(c["title"], 19, Style.PARCH, Style.font_title)
+		t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		t.custom_minimum_size.x = 130
+		vb.add_child(t)
+		var d := Style.label(c["text"], 13, Color(Style.PARCH, 0.85))
+		d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		d.custom_minimum_size.x = 130
+		vb.add_child(d)
+		if missed:
+			card.modulate = Color(1, 1, 1, 0.55))
+	tw.tween_property(card, "scale:x", 1.0, 0.16)
 
 func _show_bag() -> void:
 	var p: Dictionary = game.current()
@@ -868,7 +1018,7 @@ func show_victory(p: Dictionary) -> void:
 	n.custom_minimum_size.x = 900
 	n.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(n)
-	var s := Style.outlined(Style.label("В следующей партии с победителем пойдёт питомец — огненный лисёнок Искорка (+1 к обзору).", 24, Style.PARCH), 8)
+	var s := Style.outlined(Style.label("В следующей партии с победителем пойдёт питомец — огненный лисёнок Искорка (+1 к обзору).\nКод этой карты: %d — введи его в меню, чтобы сыграть её ещё раз." % game.map_code, 24, Style.PARCH), 8)
 	s.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	s.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	s.custom_minimum_size.x = 800

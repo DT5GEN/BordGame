@@ -221,6 +221,98 @@ static func pet_fox() -> Node3D:
 	root.set_script(Bobber)
 	return root
 
+# ---------------------------------------------------------------- ПРИЗЫВЫ (звери сына)
+static func summon_model(id: String) -> Node3D:
+	var root := Node3D.new()
+	var eye := Color("1d1a2b")
+	match id:
+		"dog":
+			var c := Color("c8924e")
+			add(root, box(Vector3(0.18, 0.16, 0.34)), c, Vector3(0, 0.22, 0))
+			add(root, box(Vector3(0.16, 0.15, 0.16)), c, Vector3(0, 0.33, 0.2))
+			add(root, box(Vector3(0.08, 0.07, 0.08)), Color("f0dcc0"), Vector3(0, 0.3, 0.3))
+			add(root, sphere(0.022, 6), eye, Vector3(0, 0.32, 0.345))
+			for side in [-1, 1]:
+				add(root, box(Vector3(0.05, 0.1, 0.03)), c.darkened(0.3), Vector3(0.07 * side, 0.37, 0.18), Vector3.ONE, Vector3(0, 0, 0.3 * side))
+				add(root, sphere(0.018, 6), eye, Vector3(0.045 * side, 0.36, 0.28))
+				for fz in [-0.11, 0.11]:
+					add(root, cyl(0.025, 0.025, 0.16, 6), c.darkened(0.2), Vector3(0.06 * side, 0.08, fz))
+			add(root, cyl(0.015, 0.03, 0.16, 6), c, Vector3(0, 0.3, -0.2), Vector3.ONE, Vector3(-0.8, 0, 0))
+		"cat":
+			var c := Color("e08a3a")
+			add(root, capsule(0.08, 0.3), c, Vector3(0, 0.18, 0), Vector3.ONE, Vector3(1.5708, 0, 0))
+			add(root, sphere(0.095, 10), c, Vector3(0, 0.27, 0.15))
+			for side in [-1, 1]:
+				add(root, cyl(0.0, 0.035, 0.08, 4), c.darkened(0.2), Vector3(0.05 * side, 0.36, 0.14))
+				add(root, sphere(0.018, 6), Color("7fe36a"), Vector3(0.035 * side, 0.29, 0.235), Vector3.ONE, Vector3.ZERO, 1.2)
+				for fz in [-0.09, 0.09]:
+					add(root, cyl(0.02, 0.02, 0.12, 6), c, Vector3(0.05 * side, 0.06, fz))
+			add(root, cyl(0.012, 0.02, 0.28, 6), c, Vector3(0, 0.3, -0.2), Vector3.ONE, Vector3(-0.3, 0, 0))
+		"parrot":
+			var g := Color("2fbf4f")
+			var fly := Node3D.new()
+			fly.position = Vector3(0, 0.45, 0)
+			root.add_child(fly)
+			add(fly, sphere(0.09, 10), g, Vector3(0, 0, 0), Vector3(1, 1.2, 1))
+			add(fly, sphere(0.065, 10), Color("e8483f"), Vector3(0, 0.12, 0.03))
+			add(fly, cyl(0.0, 0.03, 0.07, 6), Color("f2c12e"), Vector3(0, 0.11, 0.1), Vector3.ONE, Vector3(1.5708, 0, 0))
+			for side in [-1, 1]:
+				add(fly, box(Vector3(0.14, 0.03, 0.09)), Color("3d8bff"), Vector3(0.1 * side, 0.0, -0.01), Vector3.ONE, Vector3(0, 0, 0.4 * side))
+				add(fly, sphere(0.014, 6), eye, Vector3(0.035 * side, 0.14, 0.07))
+			add(fly, box(Vector3(0.05, 0.02, 0.14)), g.darkened(0.2), Vector3(0, -0.08, -0.1))
+		"hamster":
+			var c := Color("e8b062")
+			add(root, sphere(0.1, 12), c, Vector3(0, 0.1, 0), Vector3(1, 0.85, 1.1))
+			add(root, sphere(0.06, 10), Color("fff1dc"), Vector3(0, 0.08, 0.06), Vector3(1, 0.8, 0.9))
+			for side in [-1, 1]:
+				add(root, sphere(0.03, 6), c.darkened(0.2), Vector3(0.06 * side, 0.18, 0.02))
+				add(root, sphere(0.014, 6), eye, Vector3(0.035 * side, 0.13, 0.095))
+		"pig":
+			var c := Color("f3a0b0")
+			add(root, sphere(0.16, 12), c, Vector3(0, 0.2, 0), Vector3(1, 0.9, 1.3))
+			add(root, cyl(0.05, 0.05, 0.05, 10), c.darkened(0.15), Vector3(0, 0.22, 0.22), Vector3.ONE, Vector3(1.5708, 0, 0))
+			for side in [-1, 1]:
+				add(root, cyl(0.0, 0.04, 0.06, 4), c.darkened(0.1), Vector3(0.07 * side, 0.34, 0.12))
+				add(root, sphere(0.016, 6), eye, Vector3(0.05 * side, 0.28, 0.18))
+				for fz in [-0.1, 0.1]:
+					add(root, cyl(0.03, 0.03, 0.1, 6), c.darkened(0.2), Vector3(0.08 * side, 0.05, fz))
+		"cow":
+			var w := Color("f4f1e8")
+			var b := Color("2b2b2b")
+			add(root, box(Vector3(0.26, 0.22, 0.42)), w, Vector3(0, 0.3, 0))
+			add(root, box(Vector3(0.12, 0.1, 0.02)), b, Vector3(0.1, 0.33, 0.1), Vector3.ONE, Vector3(0, 1.5708, 0))
+			add(root, box(Vector3(0.1, 0.08, 0.02)), b, Vector3(-0.131, 0.3, -0.08), Vector3.ONE, Vector3(0, 1.5708, 0))
+			add(root, box(Vector3(0.18, 0.17, 0.17)), w, Vector3(0, 0.4, 0.27))
+			add(root, box(Vector3(0.14, 0.08, 0.06)), Color("f3a0b0"), Vector3(0, 0.36, 0.36))
+			for side in [-1, 1]:
+				add(root, cyl(0.0, 0.025, 0.08, 6), Color("f4ecd8"), Vector3(0.07 * side, 0.52, 0.25), Vector3.ONE, Vector3(0, 0, -0.6 * side))
+				add(root, sphere(0.018, 6), eye, Vector3(0.05 * side, 0.43, 0.355))
+				for fz in [-0.14, 0.14]:
+					add(root, cyl(0.035, 0.035, 0.2, 6), w.darkened(0.1), Vector3(0.09 * side, 0.1, fz))
+		"chicken":
+			var w := Color("fbfbf5")
+			add(root, sphere(0.1, 10), w, Vector3(0, 0.16, 0), Vector3(1, 1, 1.2))
+			add(root, sphere(0.06, 10), w, Vector3(0, 0.28, 0.07))
+			add(root, box(Vector3(0.02, 0.05, 0.06)), Color("e8483f"), Vector3(0, 0.35, 0.07))
+			add(root, cyl(0.0, 0.02, 0.05, 5), Color("f2c12e"), Vector3(0, 0.28, 0.14), Vector3.ONE, Vector3(1.5708, 0, 0))
+			for side in [-1, 1]:
+				add(root, sphere(0.012, 6), eye, Vector3(0.03 * side, 0.3, 0.12))
+				add(root, cyl(0.008, 0.008, 0.08, 4), Color("f2a02e"), Vector3(0.04 * side, 0.04, 0))
+		"wolf":
+			var wv := beast("wolf")
+			wv.scale = Vector3.ONE * 0.75
+			return wv
+		"fox":
+			var f := pet_fox()
+			f.scale = Vector3.ONE * 1.3
+			return f
+		"bear":
+			var bv := beast("bear")
+			bv.scale = Vector3.ONE * 0.85
+			return bv
+	root.set_script(Bobber)
+	return root
+
 # ---------------------------------------------------------------- ЗВЕРИ
 static func beast(kind: String) -> Node3D:
 	var root := Node3D.new()

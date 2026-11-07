@@ -44,6 +44,27 @@ var heroes: Array = [
 		"top": "2a2f6b", "top2": "f1c40f", "pants": "1f2350", "hat": "3b4bc9", "acc": [], "acc_col": "f1c40f"},
 ]
 
+## Способности на выбор при старте.
+const ABILITIES: Array = [
+	{"id": "eye", "name": "Зоркий глаз", "text": "+1 к обзору: видишь соперников, зверей и осколки дальше"},
+	{"id": "feet", "name": "Быстрые ноги", "text": "+1 шаг каждый ход"},
+	{"id": "tough", "name": "Крепкий", "text": "+6 к здоровью"},
+	{"id": "trapper", "name": "Мастер ловушек", "text": "Ловушки на 1 шаг дешевле и 2 лишние карты ловушек на старте"},
+	{"id": "beast", "name": "Друг зверей", "text": "Волк приручается за 1 мясо, призывы на 1 шаг дешевле, на старте мясо"},
+	{"id": "agile", "name": "Ловкач", "text": "В бою легче поймать щитом атаку, а блок даёт +3 вместо +2"},
+	{"id": "seeker", "name": "Чутьё на кристаллы", "text": "Осколки видно на 3 клетки дальше"},
+	{"id": "lucky", "name": "Везунчик", "text": "Раз за ход можно перебросить кубик, пока не сделал шаг"},
+]
+
+func ability(i: int) -> Dictionary:
+	return ABILITIES[posmod(i, ABILITIES.size())]
+
+func summon_idx(id: String) -> int:
+	for i in summons.size():
+		if summons[i]["id"] == id:
+			return i
+	return 0
+
 func _ready() -> void:
 	load_cards()
 

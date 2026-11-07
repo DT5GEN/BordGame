@@ -30,6 +30,9 @@ var preview_root: Node3D
 var preview_hero: Node3D
 var preview_name: Label
 var preview_title: Label
+var ability_lbl: Label
+var ability_txt: Label
+var code_edit: LineEdit
 var papyrus
 var settings_panel
 var card_editor
@@ -41,13 +44,13 @@ func _ready() -> void:
 	var used := []
 	for i in 10:
 		var h := (i * 3) % DB.heroes.size()
-		slots.append({"name": DB.heroes[h]["name"], "hero": h, "pet": false, "team": i % 2})
+		slots.append({"name": DB.heroes[h]["name"], "hero": h, "pet": false, "team": i % 2, "ability": i % DB.ABILITIES.size()})
 	var lc: Dictionary = DB.last_config
 	if not lc.is_empty():
 		var lp: Array = lc["players"]
 		count = lp.size()
 		for i in lp.size():
-			slots[i] = {"name": lp[i]["name"], "hero": lp[i]["hero"], "pet": i == DB.last_winner_slot, "team": int(lp[i].get("team", i % 2))}
+			slots[i] = {"name": lp[i]["name"], "hero": lp[i]["hero"], "pet": i == DB.last_winner_slot, "team": int(lp[i].get("team", i % 2)), "ability": int(lp[i].get("ability", i % DB.ABILITIES.size()))}
 		team_mode = lc.get("team_mode", false)
 		for i in SIZES.size():
 			if SIZES[i][1] == lc["size"]:
@@ -89,7 +92,7 @@ void fragment() {
 	var svc := SubViewportContainer.new()
 	svc.stretch = true
 	svc.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
-	svc.anchor_left = 0.52
+	svc.anchor_left = 0.6
 	svc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(svc)
 	var sv := SubViewport.new()
@@ -131,11 +134,11 @@ void fragment() {
 		Models.add(preview_root, Models.sphere(0.04, 6), [Color("ffd84a"), Color("ff8fb8"), Color("fff6e0")][i % 3], Vector3(cos(a) * 0.48, 0.02, sin(a) * 0.48))
 	var pinfo := VBoxContainer.new()
 	pinfo.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	pinfo.anchor_left = 0.52
+	pinfo.anchor_left = 0.68
 	pinfo.anchor_top = 1.0
-	pinfo.offset_top = -120
+	pinfo.offset_top = -210
 	pinfo.offset_bottom = -30
-	pinfo.offset_right = 0
+	pinfo.offset_right = -8
 	pinfo.alignment = BoxContainer.ALIGNMENT_CENTER
 	pinfo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(pinfo)
@@ -145,6 +148,25 @@ void fragment() {
 	preview_title = Style.outlined(Style.label("", 24, Style.PARCH), 6)
 	preview_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	pinfo.add_child(preview_title)
+	# выбор способности для выбранного игрока
+	var ah := HBoxContainer.new()
+	ah.alignment = BoxContainer.ALIGNMENT_CENTER
+	pinfo.add_child(ah)
+	var al := Style.glass_button(Style.button("◀", 20, 44))
+	al.pressed.connect(func(): _cycle_ability(-1))
+	ah.add_child(al)
+	ability_lbl = Style.outlined(Style.label("", 19, Style.TEAL, Style.font_title), 6)
+	ability_lbl.custom_minimum_size.x = 250
+	ability_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ah.add_child(ability_lbl)
+	var ar := Style.glass_button(Style.button("▶", 20, 44))
+	ar.pressed.connect(func(): _cycle_ability(1))
+	ah.add_child(ar)
+	ability_txt = Style.outlined(Style.label("", 16, Style.PARCH), 5)
+	ability_txt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ability_txt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ability_txt.custom_minimum_size.x = 380
+	pinfo.add_child(ability_txt)
 	# Левая панель
 	var panel := PanelContainer.new()
 	panel.position = Vector2(28, 20)
@@ -180,6 +202,13 @@ void fragment() {
 		b.pressed.connect(func(): _choose_size(i))
 		ch.add_child(b)
 		size_btns.append(b)
+	code_edit = LineEdit.new()
+	code_edit.placeholder_text = "код карты"
+	code_edit.tooltip_text = "Введи код, чтобы сыграть ту же карту ещё раз. Пусто — новая карта"
+	code_edit.max_length = 6
+	code_edit.custom_minimum_size.x = 120
+	code_edit.add_theme_font_size_override("font_size", 18)
+	ch.add_child(code_edit)
 	team_cb = CheckBox.new()
 	team_cb.text = "Командная игра: Красные против Синих"
 	team_cb.button_pressed = team_mode
@@ -325,10 +354,17 @@ func _update_preview() -> void:
 		preview_hero.add_child(pet)
 	preview_name.text = s["name"] if s["name"] != "" else pr["name"]
 	preview_title.text = pr["title"]
+	var ab: Dictionary = DB.ability(int(s["ability"]))
+	ability_lbl.text = ab["name"]
+	ability_txt.text = ab["text"]
 
 func _process(delta: float) -> void:
 	if preview_hero:
 		preview_hero.rotation.y += delta * 0.7
+
+func _cycle_ability(d: int) -> void:
+	slots[selected]["ability"] = posmod(int(slots[selected]["ability"]) + d, DB.ABILITIES.size())
+	_update_preview()
 
 func _start() -> void:
 	var list: Array = []
@@ -337,7 +373,7 @@ func _start() -> void:
 		var nm: String = s["name"].strip_edges()
 		if nm == "":
 			nm = "Игрок %d" % (i + 1)
-		list.append({"name": nm, "hero": s["hero"], "pet": s["pet"], "slot": i, "team": int(s["team"])})
+		list.append({"name": nm, "hero": s["hero"], "pet": s["pet"], "slot": i, "team": int(s["team"]), "ability": int(s["ability"])})
 	var tm := team_mode
 	if tm:
 		var n0 := 0
@@ -347,5 +383,7 @@ func _start() -> void:
 		if n0 == 0 or n0 == list.size():
 			tm = false
 	var cfg := {"players": list, "size": SIZES[size_idx][1], "show_rules": rules_cb.button_pressed, "team_mode": tm}
+	if code_edit.text.strip_edges().is_valid_int():
+		cfg["seed"] = int(code_edit.text.strip_edges())
 	DB.last_config = cfg
 	start_requested.emit(cfg)

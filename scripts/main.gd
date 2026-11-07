@@ -127,6 +127,25 @@ func _autotest() -> void:
 	g.hud.overlay_pass.visible = false
 	g._turn_start_effects()
 	await _wait(1.5)
+	await _shot("03a_bonus")
+	var qs: Array = []
+	_collect_buttons(g.hud.alert_panel, "?", qs)
+	if qs.size() >= 2:
+		qs[1].pressed.emit()
+		await _wait(0.4)
+		qs[3].pressed.emit()
+	await _wait(3.0)
+	await _shot("03b_bonus_open")
+	var db = _find_button(g.hud.alert_panel, "Забрать карты")
+	if db:
+		db.pressed.emit()
+	await _wait(1.0)
+	# призыв: собака рядом с героем
+	g.players[0].summons.append(DB.summon_idx("dog"))
+	g.players[0].summons.append(DB.summon_idx("cow"))
+	g._spawn_unit(0, DB.summon_idx("dog"), g.players[0].pos + Vector2i(1, 0))
+	g._spawn_unit(0, DB.summon_idx("cow"), g.players[0].pos + Vector2i(-1, 0))
+	await _wait(1.2)
 	await _shot("03_turn_start")
 	g.roll("D20")
 	await _wait(0.5)
@@ -280,12 +299,15 @@ func _autotest() -> void:
 
 # ------------------------------------------------------------ боты играют сами
 func _simtest() -> void:
+	DB.set_meta("fast", true)
 	var games := 4
 	for gi in games:
+		if "--unitonly" in OS.get_cmdline_user_args() and gi != 3:
+			continue
 		var n: int = [1, 3, 6, 4][gi]
 		var list: Array = []
 		for i in n:
-			list.append({"name": "Бот%d" % (i + 1), "hero": i, "pet": i == 0, "slot": i, "team": 0 if i < 3 else 1})
+			list.append({"name": "Бот%d" % (i + 1), "hero": i, "pet": i == 0, "slot": i, "team": 0 if i < 3 else 1, "ability": (i + gi) % 8})
 		var cfg: Dictionary = {"players": list, "size": [Vector2i(18, 38), Vector2i(24, 50), Vector2i(24, 50), Vector2i(24, 50)][gi], "show_rules": false, "seed": 100 + gi, "team_mode": gi == 3}
 		DB.last_config = cfg
 		start_game(cfg)
@@ -296,6 +318,8 @@ func _simtest() -> void:
 		var turns := 0
 		if gi == 3:
 			await _tame_test(g)
+			if "--unitonly" in OS.get_cmdline_user_args():
+				break
 		if gi == 1:
 			g.hud.overlay_pass.visible = false
 			await g._turn_start_effects()
@@ -328,6 +352,14 @@ func _simtest() -> void:
 				continue
 			if g.hud.phase == "act":
 				var p: Dictionary = g.current()
+				if not p.summons.is_empty() and g.steps_left >= g.summon_cost(p.summons[0]) and randf() < 0.5:
+					g.start_summon_mode(0)
+					if g.mode == "summon" and not g.summon_targets.is_empty():
+						g._place_summon(g.summon_targets.keys()[0])
+					elif g.mode == "summon":
+						g._cancel_trap_mode()
+				if g.can_reroll() and randf() < 0.3:
+					await g.reroll()
 				if not p.hand.is_empty() and g.steps_left >= 4 and randf() < 0.4:
 					g.start_trap_mode(0)
 					if g.mode == "trap" and not g.trap_targets.is_empty():
@@ -464,4 +496,32 @@ func _tame_test(g) -> void:
 	var hit = await g._bear_guard(enemy)
 	print("BEARGUARD: triggered=", hit, " enemy hp ", hp0, " -> ", enemy.hp)
 	print("ALLY: is_enemy(0,1)=", g.is_enemy(0, 1), " is_enemy(0,3)=", g.is_enemy(0, 3))
+	# призывы: каждый зверь рядом с врагом
+	var e = g.players[3]
+	for sid in ["dog", "cat", "parrot", "hamster", "fox", "chicken", "bear", "cow", "pig", "wolf"]:
+		var spot: Vector2i = e.pos + Vector2i(2, 0)
+		for dd in [Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(2, 2), Vector2i(-2, 2), Vector2i(1, 2)]:
+			if g._tile_free_for_unit(e.pos + dd):
+				spot = e.pos + dd
+				break
+		var hp0b = e.hp
+		g._spawn_unit(0, DB.summon_idx(sid), spot)
+		await g._units_act(0)
+		print("UNIT ", sid, ": units=", g.units.size(), " enemy hp ", hp0b, " -> ", e.hp, " wolves0=", g.players[0].wolves)
+		for u in g.units.duplicate():
+			g._remove_unit(u, "")
+	# бой героя с призывом врага
+	g._spawn_unit(3, DB.summon_idx("dog"), g.players[0].pos + Vector2i(1, 0))
+	var u0 = g.units[0]
+	g.cur = 0
+	await g._fight_unit(g.players[0], u0)
+	print("FIGHTUNIT: unit hp=", u0["hp"], " alive=", g.units.has(u0))
+	for u in g.units.duplicate():
+		g._remove_unit(u, "")
 	g.cur = cur_backup
+
+func _collect_buttons(n: Node, txt: String, out: Array) -> void:
+	for c in n.get_children():
+		if c is Button and c.text == txt:
+			out.append(c)
+		_collect_buttons(c, txt, out)

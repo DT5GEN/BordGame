@@ -73,8 +73,11 @@ func generate(width: int, height_: int, seed_: int, n_players: int) -> void:
 	for z in range(h - 4, h):
 		for x in w:
 			t[z * w + x] = GRASS
-	_river(int(h * 0.30))
-	_river(int(h * 0.60))
+	# 1–3 реки (на короткой карте не больше двух)
+	var nr := rng.randi_range(1, 3 if h >= 40 else 2)
+	for i in nr:
+		var f := 0.45 if nr == 1 else lerpf(0.24, 0.66, float(i) / float(nr - 1))
+		_river(int(h * f) + rng.randi_range(-1, 1))
 	_gorge()
 	for z in range(4, h - 12):
 		for x in w:
@@ -107,7 +110,7 @@ func _river(rz: int) -> void:
 				continue
 			if _near_type(p, WATER):
 				set_t(p, SAND)
-	var n := clampi(w / 10, 2, 4)
+	var n := rng.randi_range(2, 3) + (1 if w >= 34 else 0)
 	for i in n:
 		var bx := clampi(int((i + 0.5) * w / n) + rng.randi_range(-2, 2), 1, w - 2)
 		var zmin := 9999
@@ -144,7 +147,7 @@ func _gorge() -> void:
 			set_t(Vector2i(x, z0 - 1), ROCK)
 		if rng.randf() < 0.45:
 			set_t(Vector2i(x, z1 + 1), ROCK)
-	var npass := 1 if w < 30 else 2
+	var npass := rng.randi_range(1, 2) if w >= 20 else 1
 	for i in npass:
 		var px := rng.randi_range(2, w - 4)
 		if npass == 2:
@@ -265,7 +268,11 @@ func _place_objects(np: int) -> void:
 		var sp := Vector2i(int(round((i + 1.0) * w / (np + 1.0))), 1)
 		starts.append(sp)
 		_take(sp)
-	for row in [4, rivers[0] + 4, rivers[1] + 4, gorge.x - 4]:
+	var camp_rows: Array = [4]
+	for r in rivers:
+		camp_rows.append(int(r) + 4)
+	camp_rows.append(gorge.x - 4)
+	for row in camp_rows:
 		var cp := _find_camp(Vector2i(w / 2 + rng.randi_range(-3, 3), row))
 		if cp.x >= 0:
 			campfires.append(cp)
