@@ -209,14 +209,12 @@ func _build_bottom() -> void:
 	roll_box = HBoxContainer.new()
 	roll_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	stack.add_child(roll_box)
-	roll_box.add_child(Style.label("Кубик:", 22, Style.GOLD, Style.font_bold))
-	for d in DB.dice_order:
-		var b := Style.button("%s\n%s" % [d, DB.die_range_text(d)], 18, 84)
-		b.toggle_mode = true
-		b.tooltip_text = DB.dice[d]["label"]
-		b.pressed.connect(_select_die.bind(d))
-		roll_box.add_child(b)
-		dice_btns[d] = b
+	# кубик партии выбран в меню — общий для всех до конца игры
+	var gd: String = game.game_die if game else "D6"
+	selected_die = gd
+	var dl := Style.label("Кубик партии: %s  (%s шагов)" % [gd, DB.die_range_text(gd)], 22, Style.GOLD, Style.font_bold)
+	dl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	roll_box.add_child(dl)
 	var rb := Style.button("Бросить!", 30, 170)
 	rb.add_theme_font_override("font", Style.font_title)
 	rb.add_theme_stylebox_override("normal", Style.sb(Color("8a3b1f"), Style.GOLD, 3, 14, 12))
@@ -255,7 +253,6 @@ func _build_bottom() -> void:
 	var cb := Style.button("Отмена", 22)
 	cb.pressed.connect(func(): cancel_mode.emit())
 	trap_box.add_child(cb)
-	_select_die("D6")
 
 func _build_pass() -> void:
 	overlay_pass = ColorRect.new()
@@ -276,8 +273,6 @@ func set_phase(ph: String) -> void:
 	act_box.visible = ph == "act"
 	trap_box.visible = ph == "trap"
 	bottom.visible = ph in ["roll", "act", "trap"]
-	if ph == "roll" and game:
-		_select_die(game.current().die)
 	_close_popup()
 	refresh()
 

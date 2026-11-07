@@ -60,6 +60,7 @@ var haze_mm: MultiMesh
 var view_first := false
 var team_mode := false
 var map_code := 0
+var game_die := "D6"
 var units: Array = []
 var pending_summon := -1
 var summon_targets := {}
@@ -213,6 +214,9 @@ func _spawn_objects() -> void:
 
 func _setup_players() -> void:
 	var list: Array = cfg["players"]
+	game_die = cfg.get("die", "D6")
+	if not DB.dice.has(game_die):
+		game_die = "D6"
 	team_mode = cfg.get("team_mode", false)
 	var team_n := [0, 0]
 	if team_mode:
@@ -288,7 +292,7 @@ func _setup_players() -> void:
 			"dot": 0, "skip_move": 0, "slow": 0, "skip_turn": 0, "block_traps": 0, "vuln": 0,
 			"now_skip_move": false, "now_slow": 0, "now_block_traps": false, "now_vuln": false,
 			"marks": {}, "campfire": start, "warm_round": -1, "pet": pc.get("pet", false), "reports": [],
-			"discovered": team_discovered[team] if team_mode else {}, "explored": team_explored[team] if team_mode else _initial_explored(), "die": "D6", "node": node, "lantern": lantern, "trail": [],
+			"discovered": team_discovered[team] if team_mode else {}, "explored": team_explored[team] if team_mode else _initial_explored(), "die": game_die, "node": node, "lantern": lantern, "trail": [],
 		})
 
 func _team_start(team: int, used: Dictionary) -> Vector2i:
@@ -679,6 +683,7 @@ func roll(die: String) -> void:
 	if rolled or busy or game_over:
 		return
 	var p: Dictionary = players[cur]
+	die = game_die  # кубик выбран в меню и общий для всех до конца партии
 	p.die = die
 	var res := _compute_roll(p, die)
 	var face: int = res[0]

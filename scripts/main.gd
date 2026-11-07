@@ -50,6 +50,13 @@ func _ready() -> void:
 		show_menu()
 		await _wait(2.6)
 		await _shot("hero_menu")
+		start_game({"players": [{"name": "А", "hero": 0, "pet": false, "slot": 0}], "size": Vector2i(18, 38), "show_rules": false, "die": "D12"})
+		await _wait(2.0)
+		current.hud.overlay_pass.visible = false
+		current.hud.alert_panel.visible = false
+		current.hud.set_phase("roll")
+		await _wait(0.5)
+		await _shot("hero_roll")
 		get_tree().quit()
 	elif "--introtest" in OS.get_cmdline_user_args():
 		_introtest.call_deferred()

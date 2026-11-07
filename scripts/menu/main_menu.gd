@@ -22,6 +22,8 @@ var team_cb: CheckBox
 var team_info: Label
 var selected := 0
 var size_idx := 1
+var die := "D6"
+var die_btns := {}
 var rows_box: VBoxContainer
 var count_lbl: Label
 var size_btns: Array = []
@@ -52,6 +54,7 @@ func _ready() -> void:
 		for i in lp.size():
 			slots[i] = {"name": lp[i]["name"], "hero": lp[i]["hero"], "pet": i == DB.last_winner_slot, "team": int(lp[i].get("team", i % 2)), "ability": int(lp[i].get("ability", i % DB.ABILITIES.size()))}
 		team_mode = lc.get("team_mode", false)
+		die = lc.get("die", "D6")
 		for i in SIZES.size():
 			if SIZES[i][1] == lc["size"]:
 				size_idx = i
@@ -209,6 +212,19 @@ void fragment() {
 	code_edit.custom_minimum_size.x = 120
 	code_edit.add_theme_font_size_override("font_size", 18)
 	ch.add_child(code_edit)
+	# кубик партии — один на всех и до конца игры
+	var dh := HBoxContainer.new()
+	v.add_child(dh)
+	dh.add_child(Style.label("Кубик партии:", 22, Style.PARCH, Style.font_bold))
+	for d in DB.dice_order:
+		var b := Style.button("%s  %s" % [d, DB.die_range_text(d)], 17)
+		b.toggle_mode = true
+		b.tooltip_text = "%s: %s шагов, %s. Один кубик для всех до конца партии" % [d, DB.die_range_text(d), DB.dice[d]["label"]]
+		b.pressed.connect(func():
+			die = d
+			_refresh())
+		dh.add_child(b)
+		die_btns[d] = b
 	team_cb = CheckBox.new()
 	team_cb.text = "Командная игра: Красные против Синих"
 	team_cb.button_pressed = team_mode
@@ -218,7 +234,7 @@ void fragment() {
 		_refresh())
 	v.add_child(team_cb)
 	var rs := ScrollContainer.new()
-	rs.custom_minimum_size = Vector2(0, 300)
+	rs.custom_minimum_size = Vector2(0, 250)
 	rs.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(rs)
 	rows_box = VBoxContainer.new()
@@ -264,6 +280,8 @@ func _refresh() -> void:
 	count_lbl.text = str(count)
 	for i in size_btns.size():
 		size_btns[i].button_pressed = i == size_idx
+	for d in die_btns:
+		die_btns[d].button_pressed = d == die
 	for c in rows_box.get_children():
 		c.queue_free()
 	for i in count:
@@ -382,7 +400,7 @@ func _start() -> void:
 				n0 += 1
 		if n0 == 0 or n0 == list.size():
 			tm = false
-	var cfg := {"players": list, "size": SIZES[size_idx][1], "show_rules": rules_cb.button_pressed, "team_mode": tm}
+	var cfg := {"players": list, "size": SIZES[size_idx][1], "show_rules": rules_cb.button_pressed, "team_mode": tm, "die": die}
 	if code_edit.text.strip_edges().is_valid_int():
 		cfg["seed"] = int(code_edit.text.strip_edges())
 	DB.last_config = cfg
