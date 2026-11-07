@@ -1,4 +1,5 @@
 extends CanvasLayer
+const Camp = preload("res://scripts/game/campaign.gd")
 ## Интерфейс партии: карточка героя, время суток, кубики, кнопки, всплывающие окна.
 
 signal roll_requested(die: String)
@@ -328,6 +329,8 @@ func refresh() -> void:
 	status_lbl.visible = not st.is_empty()
 	var w: String = game.weather
 	time_lbl.text = "Раунд %d  •  %s  %s  •  %s" % [game.round_no, game.clock_text(), game.time_name(), w]
+	if game.camp:
+		time_lbl.text = "%s %d/3  •  " % [game.season_d["name"], game.chapter + 1] + time_lbl.text
 	if game.net and game.cur != game.my_seat:
 		time_lbl.text += "  •  Ходит: " + game.players[game.cur].name
 	steps_lbl.text = "Шагов: %d" % game.steps_left
@@ -483,9 +486,15 @@ func alert(title: String, text: String, col: Color = Style.GOLD) -> void:
 func _auto_close(delay: float) -> void:
 	alert_serial += 1
 	var my_id := alert_serial
-	get_tree().create_timer(delay).timeout.connect(func():
+	var tm := Timer.new()     # таймер внутри HUD: если карта закроется раньше, он умрёт вместе с ней
+	tm.one_shot = true
+	tm.wait_time = maxf(delay, 0.05)
+	add_child(tm)
+	tm.timeout.connect(func():
 		if alert_serial == my_id and alert_panel.visible:
-			_alert_closed.emit())
+			_alert_closed.emit()
+		tm.queue_free())
+	tm.start()
 
 ## Окно боя: если его нет (смотрим чужой бой), заводим новое.
 func _battle_box() -> VBoxContainer:
@@ -1151,3 +1160,166 @@ func show_victory(p: Dictionary) -> void:
 	g.offsets = PackedFloat32Array([0.0, 0.33, 0.66, 1.0])
 	conf.color_initial_ramp = g
 	ov.add_child(conf)
+
+
+# ------------------------------------------------------------ кампания
+## Сюжетная карточка перед раундом. Ждёт нажатия кнопки.
+func show_story(title: String, text: String, btn: String) -> void:
+	if fast:
+		print("STORY: ", title)
+		await get_tree().process_frame
+		return
+	if game.replaying:
+		return
+	var ov := ColorRect.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.color = Color(0, 0, 0, 0.0)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.add_child(ov)
+	var tw := create_tween()
+	tw.tween_property(ov, "color:a", 0.84, 0.8)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(center)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 22)
+	center.add_child(v)
+	var t := Style.outlined(Style.label(title, 62, Style.GOLD, Style.font_title), 14)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	t.custom_minimum_size.x = 860
+	v.add_child(t)
+	var body := _wrap_label(text, 26, Style.PARCH, 820)
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(body)
+	var b := Style.button(btn, 30, 260)
+	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	b.pressed.connect(func(): _story_closed.emit())
+	v.add_child(b)
+	await _story_closed
+	var tw2 := create_tween()
+	tw2.tween_property(ov, "modulate:a", 0.0, 0.4)
+	await tw2.finished
+	ov.queue_free()
+
+signal _story_closed
+
+## Итоги раунда кампании: сначала очки и ачивки, потом продолжение истории.
+func show_round_result(d: Dictionary) -> void:
+	set_phase("over")
+	var ov := ColorRect.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.color = Color(0, 0, 0, 0.0)
+	root.add_child(ov)
+	var tw := create_tween()
+	tw.tween_property(ov, "color:a", 0.78, 1.0)
+	var sc := ScrollContainer.new()
+	sc.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	ov.add_child(sc)
+	var mc := MarginContainer.new()
+	mc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	mc.add_theme_constant_override("margin_top", 30)
+	mc.add_theme_constant_override("margin_bottom", 30)
+	sc.add_child(mc)
+	var cc := CenterContainer.new()
+	mc.add_child(cc)
+	var story: Array = d["story"]
+	var page1 := VBoxContainer.new()
+	page1.add_theme_constant_override("separation", 16)
+	cc.add_child(page1)
+	var page2 := VBoxContainer.new()
+	page2.add_theme_constant_override("separation", 22)
+	page2.visible = false
+	cc.add_child(page2)
+
+	# --- страница 1: итоги
+	var sub := Style.outlined(Style.label("Раунд %d из 3  •  %s" % [int(d["chapter"]) + 1, game.season_d["name"]], 26, Style.PARCH), 8)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	page1.add_child(sub)
+	var wl := Style.outlined(Style.label(str(d["winner"]), 44, (d["wcol"] as Color).lightened(0.3), Style.font_title), 12)
+	wl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	wl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	wl.custom_minimum_size.x = 860
+	page1.add_child(wl)
+	var pc := PanelContainer.new()
+	pc.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, Style.GOLD, 2, 14, 12))
+	pc.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	page1.add_child(pc)
+	var gr := GridContainer.new()
+	gr.columns = 3
+	gr.add_theme_constant_override("h_separation", 40)
+	gr.add_theme_constant_override("v_separation", 4)
+	pc.add_child(gr)
+	for hd in ["Игрок", "За раунд", "Всего очков"]:
+		gr.add_child(Style.label(hd, 20, Style.PARCH.darkened(0.25), Style.font_bold))
+	for r in d["rows"]:
+		gr.add_child(Style.label(("★ " if r["win"] else "") + str(r["name"]), 26, (r["color"] as Color).lightened(0.3), Style.font_bold))
+		gr.add_child(Style.label("+%d" % int(r["pts"]), 26, Style.GOLD if r["win"] else Style.PARCH, Style.font_bold))
+		gr.add_child(Style.label("%d" % int(r["total"]), 26, Style.PARCH, Style.font_bold))
+	if d["team_mode"]:
+		var tot := [0, 0]
+		for r in d["rows"]:
+			if int(r["team"]) >= 0:
+				tot[int(r["team"])] += int(r["total"])
+		var tl := Style.label("Команды: «%s» — %d,  «%s» — %d" % [game.team_name(0), tot[0], game.team_name(1), tot[1]], 22, Style.PARCH)
+		tl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		page1.add_child(tl)
+	for e in d["ach"]:
+		var info: Array = Camp.ACH[e["id"]]
+		var al := Style.outlined(Style.label("Ачивка «%s» — %s" % [info[0], e["who"]], 24, Color("7fe3ff"), Style.font_bold), 8)
+		al.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		al.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		al.custom_minimum_size.x = 860
+		al.tooltip_text = str(info[1])
+		page1.add_child(al)
+	var b1 := Style.button("Что дальше?", 28, 260)
+	b1.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	page1.add_child(b1)
+	var mb1 := Style.button("В меню", 22, 160)
+	mb1.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	mb1.pressed.connect(func(): menu_requested.emit())
+	page1.add_child(mb1)
+
+	# --- страница 2: сюжет и кнопка «Дальше»
+	var t := Style.outlined(Style.label(str(story[0]), 54, Style.GOLD, Style.font_title), 14)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	t.custom_minimum_size.x = 860
+	page2.add_child(t)
+	var body := _wrap_label(str(story[1]), 26, Style.PARCH, 840)
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	page2.add_child(body)
+	var h := HBoxContainer.new()
+	h.alignment = BoxContainer.ALIGNMENT_CENTER
+	h.add_theme_constant_override("separation", 20)
+	page2.add_child(h)
+	if not d["final"]:
+		var nb := Style.button("Дальше: %s" % d["next_name"], 28, 320)
+		nb.pressed.connect(func():
+			nb.disabled = true
+			game.request_next())
+		h.add_child(nb)
+		if game.net and not Net.host:
+			# в сети идти дальше обычно нажимает хозяин; если он молчит — кнопка включится сама
+			nb.disabled = true
+			nb.text = "Ждём хозяина…"
+			var wait_t := Timer.new()      # таймер живёт внутри HUD: умрёт вместе с картой и не вызовет мёртвую кнопку
+			wait_t.one_shot = true
+			wait_t.wait_time = 25.0
+			add_child(wait_t)
+			wait_t.timeout.connect(func():
+				nb.disabled = false
+				nb.text = "Дальше: %s" % d["next_name"])
+			wait_t.start()
+	var mb := Style.button("В меню", 28, 200)
+	mb.pressed.connect(func(): menu_requested.emit())
+	h.add_child(mb)
+	var cl := Style.outlined(Style.label("Код этой карты: %d" % int(d["code"]), 18, Style.PARCH.darkened(0.2)), 6)
+	cl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	page2.add_child(cl)
+	b1.pressed.connect(func():
+		page1.visible = false
+		page2.visible = true)
+	Settings.play("victory", 0.0)

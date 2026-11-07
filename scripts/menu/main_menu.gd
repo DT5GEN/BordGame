@@ -29,6 +29,7 @@ var rows_box: VBoxContainer
 var count_lbl: Label
 var size_btns: Array = []
 var rules_cb: CheckBox
+var camp_cb: CheckBox
 var preview_root: Node3D
 var preview_hero: Node3D
 var preview_name: Label
@@ -238,6 +239,11 @@ void fragment() {
 		team_mode = on
 		_refresh())
 	v.add_child(team_cb)
+	camp_cb = CheckBox.new()
+	camp_cb.text = "Кампания: Лето, Осень, Зима (3 карты и сюжет)"
+	camp_cb.button_pressed = DB.last_config.has("camp")
+	camp_cb.add_theme_font_size_override("font_size", 19)
+	v.add_child(camp_cb)
 	var rs := ScrollContainer.new()
 	rs.custom_minimum_size = Vector2(0, 250)
 	rs.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -411,5 +417,7 @@ func _start() -> void:
 	var cfg := {"players": list, "size": SIZES[size_idx][1], "show_rules": rules_cb.button_pressed, "team_mode": tm, "die": die}
 	if code_edit.text.strip_edges().is_valid_int():
 		cfg["seed"] = int(code_edit.text.strip_edges())
+	if camp_cb.button_pressed:
+		cfg["camp"] = {"chapter": 0, "scores": [], "wins": []}
 	DB.last_config = cfg
 	start_requested.emit(cfg)

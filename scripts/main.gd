@@ -88,6 +88,8 @@ func _ready() -> void:
 		get_tree().quit()
 	elif "--introtest" in OS.get_cmdline_user_args():
 		_introtest.call_deferred()
+	elif "--camptest" in OS.get_cmdline_user_args():
+		_camptest.call_deferred()
 	elif "--nettest" in OS.get_cmdline_user_args():
 		_nettest.call_deferred()
 	elif "--lobbytest" in OS.get_cmdline_user_args():
@@ -117,6 +119,7 @@ func start_game(cfg: Dictionary) -> void:
 	g.cfg = cfg
 	g.exit_to_menu.connect(show_menu)
 	g.restart_game.connect(_restart)
+	g.next_chapter.connect(start_game, CONNECT_DEFERRED)
 	_switch(g)
 
 func _restart() -> void:
@@ -577,6 +580,7 @@ func _nettest() -> void:
 	var port := "7777"
 	var limit := 120
 	var kill_at := 0
+	var win_at: Array = []
 	var tag := ""
 	for a in args:
 		if a.begins_with("--port="):
@@ -587,7 +591,12 @@ func _nettest() -> void:
 			kill_at = int(a.substr(10))
 		if a.begins_with("--tag="):
 			tag = a.substr(6)
+		if a.begins_with("--winat="):
+			for x in a.substr(8).split(","):
+				win_at.append(int(x))
 	var url := "ws://127.0.0.1:" + port
+	var camp_on: bool = "--camp" in args
+	var hooked := [null]
 	var code_file := "/tmp/nettest_code_" + port
 	var log_path := "/tmp/nettest_%s%s_%s.log" % [role, tag, port]
 	var logf := FileAccess.open(log_path, FileAccess.WRITE)
@@ -609,13 +618,11 @@ func _nettest() -> void:
 		var cfg := {"players": list, "size": Vector2i(18, 38), "show_rules": false, "team_mode": false, "die": "D6", "seed": int(d["seed"]), "net": true, "my_seat": my}
 		cfg["replay"] = bool(d.get("replay", false))
 		print("START seat=", my, " seed=", d["seed"], " replay=", cfg["replay"])
+		if camp_on:
+			cfg["camp"] = {"chapter": 0, "scores": [], "wins": []}
 		start_game(cfg)
 		if "--beast" in args:
-			_force_beasts(current)
-		var g = current
-		g.cmd_done.connect(func(seq):
-			logf.store_line("SYNC %d %s" % [seq, g.state_digest()])
-			logf.flush()))
+			_force_beasts(current))
 	if "--rejoin" in args:
 		Net.rejoin()
 	elif role == "host":
@@ -641,8 +648,25 @@ func _nettest() -> void:
 			print("KILL")
 			OS.kill(OS.get_process_id())
 		var g = current
+		if g != null and g.get("net") and g != hooked[0] and g.get("hud") != null:
+			# каждая новая карта кампании: подключаем проверку «у всех одно и то же»
+			hooked[0] = g
+			logf.store_line("CHAPTER %d season=%s code=%d" % [g.chapter, g.season_d["name"], g.map_code])
+			g.cmd_done.connect(func(seq):
+				logf.store_line("SYNC %d %s" % [seq, g.state_digest()])
+				logf.flush()
+				var thr: int = win_at[g.chapter] if g.chapter < win_at.size() else -1
+				if thr > 0 and seq == thr and not g.game_over:
+					g.players[0].shards = 3
+					g._victory(g.players[0]))
 		if g == null or not g.get("net") or g.get("hud") == null or g.game_over:
 			if g != null and g.get("game_over") == true:
+				if g.get("camp") and g.chapter < 2:
+					if g._camp_ready and role == "host" and not g.get_meta("asked", false):
+						g.set_meta("asked", true)
+						logf.store_line("NEXT scores=%s" % [g._camp_scores])
+						g.request_next()
+					continue
 				break
 			continue
 		if "--real" in args:
@@ -749,3 +773,58 @@ func _force_beasts(g) -> void:
 		o["pos"] = np
 		(o["node"] as Node3D).position = g.map.world_pos(np)
 		g.objects[np] = o
+
+
+## Проверка кампании без сети: три главы подряд, скриншоты сезонов и экранов итогов.
+func _camptest() -> void:
+	var list: Array = []
+	for i in 3:
+		list.append({"name": "Бот%d" % (i + 1), "hero": i, "pet": false, "slot": i, "team": 0, "ability": i})
+	var cfg: Dictionary = {"players": list, "size": Vector2i(24, 50), "show_rules": false, "seed": 777, "team_mode": false,
+		"camp": {"chapter": 0, "scores": [], "wins": []}}
+	DB.last_config = cfg
+	start_game(cfg)
+	var winners := [0, 1, 2]
+	for ch in 3:
+		await _wait(1.5)
+		var g = current
+		print("CAMP chapter=", g.chapter, " season=", g.season_d["name"], " map_code=", g.map_code, " beasts=", g.objects.values().filter(func(o): return o["type"] == "beast").size(), " hours/round=", g.hours_per_round, " dark_speed=", g.dark_speed)
+		for i in g.players.size():
+			print("  ", g.players[i].name, " pet=", g.players[i].pet, " potions=", g.players[i].items.count("potion"), " hand=", g.players[i].hand.size())
+		await _shot("c%d_story" % (ch + 1))
+		g.hud._story_closed.emit()
+		await _wait(1.0)
+		g.hud.overlay_pass.visible = false
+		g.cam_dist = 13.0
+		g.cam_pitch = deg_to_rad(42.0)
+		g.cam_target = g.players[0].node.position + Vector3(0, 0, 5)
+		g.cam_goal = g.cam_target
+		g.follow = null
+		if ch == 2:
+			g.rain.emitting = true
+		await _wait(1.6)
+		await _shot("c%d_map" % (ch + 1))
+		# быстрая победа выбранного игрока
+		Engine.time_scale = 6.0
+		var w: Dictionary = g.players[winners[ch]]
+		w.shards = 3
+		g.players[(winners[ch] + 1) % 3].shards = 1
+		g._victory(w)
+		var guard := 0
+		while not g._camp_ready and guard < 900:
+			await get_tree().process_frame
+			guard += 1
+		Engine.time_scale = 1.0
+		await _wait(1.0)
+		await _shot("c%d_result" % (ch + 1))
+		var wb := _find_button(g, "Что дальше?")
+		if wb:
+			wb.pressed.emit()
+			await _wait(0.4)
+			await _shot("c%d_result2" % (ch + 1))
+		print("CAMP result: scores=", g._camp_scores, " wins=", g._camp_wins)
+		if ch < 2:
+			g.request_next()
+	print("CAMP ach=", load("res://scripts/game/campaign.gd").load_all())
+	print("CAMPTEST DONE")
+	get_tree().quit()

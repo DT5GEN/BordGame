@@ -4,10 +4,12 @@ extends Node3D
 signal exit_to_menu
 signal restart_game
 signal cmd_done(seq: int)
+signal next_chapter(cfg: Dictionary)
 
 const MapGen = preload("res://scripts/world/map_gen.gd")
 const Models = preload("res://scripts/world/models.gd")
 const Builder = preload("res://scripts/world/world_builder.gd")
+const Camp = preload("res://scripts/game/campaign.gd")
 const HUD = preload("res://scripts/ui/hud.gd")
 const Papyrus = preload("res://scripts/ui/papyrus.gd")
 const SettingsPanel = preload("res://scripts/ui/settings_panel.gd")
@@ -89,6 +91,19 @@ var _seat_of := {}
 var v_explored := {}
 var v_discovered := {}
 var _net_over_banner: Label = null
+var _status_cb := Callable()
+var _chaining := false      # переходим на следующую карту: связь с сервером не рвём
+
+# --- кампания «Времена года»
+var camp := false
+var chapter := 0
+var camp_data: Dictionary = {}
+var season_d: Dictionary = Camp.season(0)
+var _camp_ready := false    # итоги раунда показаны, можно идти дальше
+var _camp_scores: Array = []
+var _camp_wins: Array = []
+var _camp_win_ids: Array = []
+var _snow := false
 
 var _press := false
 var _press_pos := Vector2.ZERO
@@ -109,16 +124,28 @@ func _ready() -> void:
 	net = cfg.get("net", false)
 	my_seat = int(cfg.get("my_seat", -1))
 	replaying = cfg.get("replay", false)
-	_caught = not replaying
+	_caught = not replaying or Net.caught
+	camp_data = cfg.get("camp", {})
+	camp = not camp_data.is_empty()
+	chapter = int(camp_data.get("chapter", 0)) if camp else 0
+	season_d = Camp.season(chapter if camp else 0)
 	var sz: Vector2i = cfg.get("size", Vector2i(28, 64))
 	map = MapGen.new()
 	map_code = int(cfg.get("seed", 0))
 	if map_code <= 0:
 		map_code = rng.randi_range(10000, 99999)
+	if camp:
+		if not camp_data.has("base"):
+			camp_data["base"] = map_code
+		map_code = int(camp_data["base"]) + chapter * 1111
 	if net:
 		rng.seed = map_code * 7919 + 17   # у всех клиентов одинаковая «случайность»
 		for i in cfg["players"].size():
 			_seat_of[int(cfg["players"][i]["cid"])] = i
+	if camp:
+		map.season = chapter
+		map.hard = float(season_d["hard"])
+		map.wolf_share = float(season_d["wolf"])
 	map.generate(sz.x, sz.y, map_code, cfg["players"].size())
 	_setup_env()
 	var tiles := Node3D.new()
@@ -137,6 +164,10 @@ func _ready() -> void:
 	var expected: float = map.h * 1.35 / 5.5
 	hours_per_round = 13.0 / maxf(1.0, expected * 0.6)
 	dark_speed = maxi(1, int(round(map.h / 35.0)))
+	if camp:
+		# каждая следующая карта жёстче: ночь наступает раньше, тьма ползёт быстрее
+		hours_per_round *= 1.0 + 0.12 * chapter
+		dark_speed += chapter
 	hud = HUD.new()
 	hud.game = self
 	add_child(hud)
@@ -166,21 +197,33 @@ func _ready() -> void:
 	if cfg.get("show_rules", false):
 		papyrus.open()
 	if net:
+		_last_seq = int(cfg.get("start_seq", 0))
 		Net.act.connect(_on_net_act)
 		Net.caught_up.connect(_on_caught_up)
-		Net.status.connect(func(t): hud.toast(t, Style.GOLD, 2.5))
+		_status_cb = func(t): hud.toast(t, Style.GOLD, 2.5)
+		Net.status.connect(_status_cb)
 		hud.skip_requested.connect(func(): Net.send_act({"k": "skip"}))
+		for e in Net.acts_log:       # действия, которые пришли, пока мы переходили на эту карту
+			_on_net_act(e)
 		_flow = true
+		if camp and not replaying:
+			await hud.show_story(Camp.INTRO[chapter][0], Camp.INTRO[chapter][1], "В путь!")
 		await begin_turn()
 		_flow = false
 	else:
+		if camp:
+			await hud.show_story(Camp.INTRO[chapter][0], Camp.INTRO[chapter][1], "В путь!")
 		begin_turn()
 
 func _exit_tree() -> void:
 	if net:
-		Engine.time_scale = 1.0
 		if Net.act.is_connected(_on_net_act):
 			Net.act.disconnect(_on_net_act)
+		if _status_cb.is_valid() and Net.status.is_connected(_status_cb):
+			Net.status.disconnect(_status_cb)
+		if _chaining:
+			return
+		Engine.time_scale = 1.0
 		Net.leave()
 		DB.restore_own_balance()
 
@@ -325,6 +368,9 @@ func _setup_players() -> void:
 		var start_items: Array = ["potion"]
 		if ab_id == "beast":
 			start_items.append("meat")
+		if pc.get("boost", false):
+			start_items.append("potion")   # «Благословение сезона» тому, кто отстаёт в кампании
+			hand.append(DB.random_trap(rng))
 		players.append({
 			"idx": i, "name": pc["name"], "slot": pc.get("slot", i), "hero": pc["hero"], "color": DB.PLAYER_COLORS[i],
 			"hp": hp_max, "max_hp": hp_max, "dmg_mult": kb, "step_mult": 1.0 + (kb - 1.0) * 0.5,
@@ -447,6 +493,22 @@ func _setup_darkness_and_rain() -> void:
 	rain.mesh = dm2
 	rain.emitting = false
 	add_child(rain)
+	if season_d["precip"] == "snow":
+		_snow = true
+		rain.amount = 900
+		rain.lifetime = 4.0
+		rain.direction = Vector3(0.3, -1, 0)
+		rain.spread = 14.0
+		rain.initial_velocity_min = 1.2
+		rain.initial_velocity_max = 2.4
+		rain.gravity = Vector3(0, -0.8, 0)
+		var sm := Models.box(Vector3(0.05, 0.05, 0.05))
+		var snm := StandardMaterial3D.new()
+		snm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		snm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		snm.albedo_color = Color(1, 1, 1, 0.9)
+		sm.material = snm
+		rain.mesh = sm
 
 func _setup_camera() -> void:
 	cam = Camera3D.new()
@@ -741,6 +803,15 @@ func _pump() -> void:
 		_q.pop_front()
 		_sys_act(m)
 		return
+	if k == "next":
+		if not game_over:
+			_q.pop_front()   # лишнее «дальше» (нажали двое сразу) — не нужно
+			return
+		if not _camp_ready:
+			return           # у нас ещё идёт ролик победы — ждём
+		_q.pop_front()
+		_advance(int(m.get("seq", 0)))
+		return
 	if k == "res":
 		_q.pop_front()      # лишний ответ без вопроса — выбрасываем, чтобы не застрять
 		return
@@ -1017,12 +1088,13 @@ func _advance_round() -> void:
 	tw.tween_method(_set_time_visual, _time_shown, minf(hour, 24.0), 2.0)
 
 func _roll_weather() -> void:
-	var chance := 0.18 if hour < 17.0 else 0.35
+	var wc: Array = season_d["weather"]
+	var chance: float = wc[0] if hour < 17.0 else wc[1]
 	var raining := rng.randf() < chance
 	rain.emitting = raining
 	wind = rng.randf_range(0.15, 0.5) + (0.6 if raining else 0.0)
 	if raining:
-		weather = "Дождь"
+		weather = "Снегопад" if _snow else "Дождь"
 	elif wind > 0.4:
 		weather = "Ветрено"
 	else:
@@ -1068,16 +1140,20 @@ func _set_time_visual(hv: float) -> void:
 	var elev := lerpf(a[1], b[1], k)
 	var yaw := lerpf(a[2], b[2], k)
 	sun.rotation_degrees = Vector3(-elev, yaw, 0)
-	sun.light_color = (a[3] as Color).lerp(b[3], k)
+	var tint: Color = season_d["sky_tint"]
+	var tk: float = season_d["tint_k"]
+	sun.light_color = ((a[3] as Color).lerp(b[3], k)).lerp((a[3] as Color).lerp(b[3], k) * tint, tk)
 	sun.light_energy = lerpf(a[4], b[4], k)
-	sky_mat.sky_top_color = (a[5] as Color).lerp(b[5], k)
-	sky_mat.sky_horizon_color = (a[6] as Color).lerp(b[6], k)
+	var sky_t: Color = (a[5] as Color).lerp(b[5], k)
+	var sky_h: Color = (a[6] as Color).lerp(b[6], k)
+	sky_mat.sky_top_color = sky_t.lerp(sky_t * tint, tk)
+	sky_mat.sky_horizon_color = sky_h.lerp(sky_h * tint, tk)
 	sky_mat.ground_horizon_color = sky_mat.sky_horizon_color
 	sky_mat.ground_bottom_color = sky_mat.sky_top_color.darkened(0.5)
 	env.ambient_light_energy = lerpf(a[7], b[7], k)
 	var nt := lerpf(a[8], b[8], k)
 	env.fog_light_color = sky_mat.sky_horizon_color
-	env.fog_density = 0.004 + nt * 0.016
+	env.fog_density = 0.004 + nt * 0.016 + float(season_d["fog"])
 	if info.get("water_mat"):
 		(info["water_mat"] as ShaderMaterial).set_shader_parameter("darkness", nt)
 	for p in players:
@@ -2597,6 +2673,111 @@ func _victory(p: Dictionary) -> void:
 	Settings.play("victory", 0.0)
 	var elapsed := (Time.get_ticks_msec() - t_start) / 1000.0
 	await get_tree().create_timer(maxf(2.6, fend + 1.0 - elapsed)).timeout
-	hud.show_victory(p)
+	if camp:
+		_camp_finish(p)
+	else:
+		hud.show_victory(p)
 
 
+
+
+# ================================================================= КАМПАНИЯ
+func _win_ids(p: Dictionary) -> Array:
+	var ids: Array = []
+	for q in players:
+		if q.idx == p.idx or (team_mode and q.team == p.team):
+			ids.append(q.idx)
+	return ids
+
+## Подводит итоги раунда: очки, ачивки, сюжет — и показывает экран итогов.
+func _camp_finish(p: Dictionary) -> void:
+	_camp_win_ids = _win_ids(p)
+	var prev: Array = camp_data.get("scores", [])
+	var pts: Array = []
+	var scores: Array = []
+	for q in players:
+		var pt: int = Camp.WIN_POINTS if _camp_win_ids.has(q.idx) else mini(int(q.shards), Camp.SHARD_POINTS_MAX)
+		pts.append(pt)
+		scores.append((int(prev[q.idx]) if q.idx < prev.size() else 0) + pt)
+	_camp_scores = scores
+	var wins: Array = camp_data.get("wins", []).duplicate()
+	wins.append(_camp_win_ids)
+	_camp_wins = wins
+	var final: bool = chapter >= Camp.COUNT - 1
+	# ачивки
+	var got: Array = []
+	for i in _camp_win_ids:
+		var ids: Array = [["summer_hero", "autumn_hero", "winter_conqueror"][chapter]]
+		if final:
+			var every := true
+			for w in wins:
+				if not (w as Array).has(i):
+					every = false
+			if every:
+				ids.append("all_seasons")
+		for id in ids:
+			got.append({"who": players[i].name, "id": id})
+	if final:
+		var best := -1
+		for v in scores:
+			best = maxi(best, int(v))
+		for q in players:
+			if int(scores[q.idx]) == best and not got.any(func(e): return e["who"] == q.name and e["id"] == "campaign_leader"):
+				got.append({"who": q.name, "id": "campaign_leader"})
+	for e in got:
+		if not net or players[my_seat].name == e["who"]:
+			Camp.grant(str(e["who"]), str(e["id"]))
+	_camp_ready = true
+	var wtxt := "Победитель раунда: %s" % p.name
+	var wcol: Color = p.color
+	if team_mode:
+		var names: Array = []
+		for q in players:
+			if q.team == p.team:
+				names.append(q.name)
+		wtxt = "Победила команда «%s»: %s" % [team_name(p.team), ", ".join(names)]
+		wcol = DB.TEAM_COLORS[p.team]
+	var rows: Array = []
+	for q in players:
+		rows.append({"name": q.name, "color": DB.TEAM_COLORS[q.team] if team_mode else q.color, "pts": pts[q.idx], "total": scores[q.idx],
+			"win": _camp_win_ids.has(q.idx), "team": q.team})
+	hud.show_round_result({
+		"chapter": chapter, "final": final, "winner": wtxt, "wcol": wcol, "rows": rows, "ach": got,
+		"story": Camp.AFTER[chapter], "next_name": Camp.season(chapter + 1)["name"] if not final else "",
+		"team_mode": team_mode, "code": map_code,
+	})
+
+## Кнопка «Дальше». По сети её нажимает хозяин, и «дальше» идёт всем одновременно через сервер.
+func request_next() -> void:
+	if not _camp_ready:
+		return
+	if net:
+		Net.send_act({"k": "next"})
+	else:
+		_advance(0)
+
+func _advance(seq: int) -> void:
+	if chapter >= Camp.COUNT - 1:
+		return
+	_camp_ready = false
+	var c: Dictionary = cfg.duplicate(true)
+	c["show_rules"] = false
+	var cd: Dictionary = camp_data.duplicate(true)
+	cd["chapter"] = chapter + 1
+	cd["scores"] = _camp_scores.duplicate()
+	cd["wins"] = _camp_wins.duplicate(true)
+	c["camp"] = cd
+	var low := 1 << 30
+	var high := -1
+	for v in _camp_scores:
+		low = mini(low, int(v))
+		high = maxi(high, int(v))
+	for i in players.size():
+		var pc: Dictionary = c["players"][i]
+		pc["pet"] = _camp_win_ids.has(i)
+		pc["boost"] = low < high and int(_camp_scores[i]) == low
+	if net:
+		c["start_seq"] = seq
+		c["replay"] = replaying
+		_chaining = true
+	next_chapter.emit(c)

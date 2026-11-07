@@ -28,6 +28,9 @@ var _first: Dictionary = {}
 var _ping := 0.0
 var _retry := 0.0
 var _joined := false
+var acts_log: Array = []     # все действия партии по порядку: нужны, чтобы следующая карта кампании ничего не пропустила
+var caught := false          # сервер уже прислал всю историю
+var _log_last := 0
 
 # ------------------------------------------------------------------ адрес сервера
 static func normalize(u: String) -> String:
@@ -121,6 +124,9 @@ func disconnect_now() -> void:
 func leave() -> void:
 	disconnect_now()
 	in_game = false
+	acts_log = []
+	_log_last = 0
+	caught = false
 	room = ""
 	lobby_data = {}
 	start_data = {}
@@ -205,13 +211,19 @@ func _handle(txt: String) -> void:
 				return          # после переподключения: игра уже идёт, повтор не нужен
 			start_data = m
 			in_game = true
+			acts_log = []
+			_log_last = 0
+			caught = false
 			started.emit(m)
 		"act":
+			_log_act(m)
 			act.emit(m)
 		"batch":
 			for e in m.get("acts", []):
+				_log_act(e)
 				act.emit(e)
 		"caught_up":
+			caught = true
 			caught_up.emit()
 		"err":
 			var txt2 := str(m.get("msg", "Ошибка"))
@@ -220,3 +232,9 @@ func _handle(txt: String) -> void:
 					in_game = false
 				clear_session()
 			error.emit(txt2)
+
+func _log_act(m: Dictionary) -> void:
+	var seq := int(m.get("seq", 0))
+	if seq > _log_last:
+		_log_last = seq
+		acts_log.append(m)

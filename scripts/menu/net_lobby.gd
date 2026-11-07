@@ -18,6 +18,8 @@ var host_box: VBoxContainer
 var size_btns: Array = []
 var die_btns := {}
 var team_cb: CheckBox
+var camp_cb: CheckBox
+var camp_on := false
 var start_btn: Button
 var hero := 0
 var ability := 0
@@ -185,6 +187,13 @@ func _build_room(parent: VBoxContainer) -> void:
 		team_mode = on
 		_push_cfg())
 	host_box.add_child(team_cb)
+	camp_cb = CheckBox.new()
+	camp_cb.text = "Кампания: Лето, Осень, Зима (3 карты и сюжет)"
+	camp_cb.add_theme_font_size_override("font_size", 18)
+	camp_cb.toggled.connect(func(on):
+		camp_on = on
+		_push_cfg())
+	host_box.add_child(camp_cb)
 	var bh := HBoxContainer.new()
 	bh.add_theme_constant_override("separation", 10)
 	panel_room.add_child(bh)
@@ -262,7 +271,7 @@ func _upd_profile() -> void:
 		Net.set_profile(_profile())
 
 func _cfg() -> Dictionary:
-	return {"size_idx": size_idx, "die": die, "team_mode": team_mode, "balance": DB.balance_dict()}
+	return {"size_idx": size_idx, "die": die, "team_mode": team_mode, "camp": camp_on, "balance": DB.balance_dict()}
 
 func _push_cfg() -> void:
 	if Net.host:
@@ -313,6 +322,8 @@ func _on_lobby(d: Dictionary) -> void:
 		die = str(cfg.get("die", die))
 		team_mode = bool(cfg.get("team_mode", team_mode))
 		team_cb.set_pressed_no_signal(team_mode)
+		camp_on = bool(cfg.get("camp", camp_on))
+		camp_cb.set_pressed_no_signal(camp_on)
 	for i in size_btns.size():
 		size_btns[i].set_pressed_no_signal(i == size_idx)
 		size_btns[i].disabled = not Net.host
@@ -320,6 +331,7 @@ func _on_lobby(d: Dictionary) -> void:
 		die_btns[k].set_pressed_no_signal(k == die)
 		die_btns[k].disabled = not Net.host
 	team_cb.disabled = not Net.host
+	camp_cb.disabled = not Net.host
 	team_btn.visible = team_mode
 	for c in players_box.get_children():
 		c.queue_free()
@@ -349,4 +361,6 @@ func _on_started(d: Dictionary) -> void:
 	var cfg := {"players": list, "size": SIZES[clampi(int(cfg0.get("size_idx", 1)), 0, SIZES.size() - 1)][1],
 		"show_rules": false, "team_mode": bool(cfg0.get("team_mode", false)), "die": str(cfg0.get("die", "D6")),
 		"seed": int(d["seed"]), "net": true, "my_seat": my, "replay": bool(d.get("replay", false))}
+	if bool(cfg0.get("camp", false)):
+		cfg["camp"] = {"chapter": 0, "scores": [], "wins": []}
 	start_requested.emit(cfg)

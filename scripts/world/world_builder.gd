@@ -3,11 +3,12 @@ extends RefCounted
 
 const M = preload("res://scripts/world/map_gen.gd")
 const Models = preload("res://scripts/world/models.gd")
+const Camp = preload("res://scripts/game/campaign.gd")
 
 const BOTTOM := -1.4
 const CHUNK := 8
 
-static func tile_color(tt: int, x: int, z: int, rng: RandomNumberGenerator) -> Color:
+static func tile_color(tt: int, x: int, z: int, rng: RandomNumberGenerator, season := 0) -> Color:
 	var c: Color
 	match tt:
 		M.GRASS: c = Color(0.45, 0.72, 0.32)
@@ -21,6 +22,7 @@ static func tile_color(tt: int, x: int, z: int, rng: RandomNumberGenerator) -> C
 		M.SHRINE: c = Color(0.74, 0.72, 0.66)
 		M.PATH: c = Color(0.68, 0.58, 0.42)
 		_: c = Color.MAGENTA
+	c = Camp.tile_base(season, tt, c)
 	var checker := 0.035 if (x + z) % 2 == 0 else -0.01
 	var v := rng.randf_range(-0.03, 0.03)
 	return Color(clampf(c.r + checker + v, 0, 1), clampf(c.g + checker + v, 0, 1), clampf(c.b + checker * 0.5 + v * 0.5, 0, 1))
@@ -43,7 +45,7 @@ static func build(map, parent: Node3D) -> Dictionary:
 			key = key * 100000 + (z / CHUNK) * 1000 + (x / CHUNK)
 			if not groups.has(key):
 				groups[key] = []
-			groups[key].append([p, tile_color(tt, x, z, rng), topy])
+			groups[key].append([p, tile_color(tt, x, z, rng, map.season), topy])
 	var boxm := BoxMesh.new()
 	boxm.size = Vector3.ONE
 	var tile_mat := StandardMaterial3D.new()
@@ -87,6 +89,8 @@ static func build(map, parent: Node3D) -> Dictionary:
 	water.mesh = pm
 	var wm := ShaderMaterial.new()
 	wm.shader = load("res://shaders/water.gdshader")
+	wm.set_shader_parameter("deep", Camp.season(map.season)["water_deep"])
+	wm.set_shader_parameter("shallow", Camp.season(map.season)["water_shallow"])
 	water.material_override = wm
 	water.position = Vector3(map.w * 0.5 - 0.5, -0.22, map.h * 0.5 - 0.5)
 	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -135,6 +139,7 @@ static func _trees(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 	var trunks: Array = []
 	var pines: Array = []
 	var rounds: Array = []
+	var sn: int = map.season
 	var busy := {}
 	for o in map.objects:
 		busy[o["pos"]] = true
@@ -165,11 +170,27 @@ static func _trees(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 				var s := rng.randf_range(0.75, 1.15)
 				trunks.append([Transform3D(Basis.from_scale(Vector3(s, s, s)), base + Vector3(0, 0.15 * s, 0)), Color("6b4a2c"), p])
 				var g := Color(rng.randf_range(0.16, 0.26), rng.randf_range(0.42, 0.58), rng.randf_range(0.18, 0.26))
-				if rng.randf() < 0.55:
+				var top_c := g.lightened(0.08)
+				if sn == 1:
+					# осень: ёлки темнеют
+					g = Color(rng.randf_range(0.16, 0.24), rng.randf_range(0.34, 0.44), rng.randf_range(0.14, 0.2))
+					top_c = g.lightened(0.06)
+				elif sn == 2:
+					# зима: на ёлках лежит снег
+					g = Color(rng.randf_range(0.14, 0.2), rng.randf_range(0.30, 0.38), rng.randf_range(0.24, 0.3))
+					top_c = Color(0.9, 0.95, 0.98)
+				if rng.randf() < (0.8 if sn == 2 else 0.55):
 					pines.append([Transform3D(Basis.from_scale(Vector3(s, s, s)), base + Vector3(0, 0.45 * s, 0)), g, p])
-					pines.append([Transform3D(Basis.from_scale(Vector3(s * 0.75, s * 0.8, s * 0.75)), base + Vector3(0, 0.75 * s, 0)), g.lightened(0.08), p])
+					pines.append([Transform3D(Basis.from_scale(Vector3(s * 0.75, s * 0.8, s * 0.75)), base + Vector3(0, 0.75 * s, 0)), top_c, p])
 				else:
 					var g2 := Color(rng.randf_range(0.30, 0.45), rng.randf_range(0.55, 0.70), rng.randf_range(0.20, 0.30))
+					if sn == 1:
+						# осенние лиственные: жёлтые, оранжевые, красные
+						var pal := [Color(0.92, 0.62, 0.14), Color(0.82, 0.30, 0.12), Color(0.95, 0.80, 0.22), Color(0.66, 0.22, 0.14)]
+						g2 = (pal[rng.randi() % pal.size()] as Color).lightened(rng.randf_range(-0.05, 0.08))
+					elif sn == 2:
+						# зимой лиственные в снегу и инее
+						g2 = Color(rng.randf_range(0.80, 0.9), rng.randf_range(0.86, 0.94), rng.randf_range(0.92, 0.98))
 					rounds.append([Transform3D(Basis.from_scale(Vector3(s, s * 0.9, s)), base + Vector3(0, 0.58 * s, 0)), g2, p])
 	var fm := ShaderMaterial.new()
 	fm.shader = load("res://shaders/foliage.gdshader")
@@ -191,13 +212,23 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 	var tufts: Array = []
 	var boulders: Array = []
 	var fcols := [Color("fff6e0"), Color("ffd84a"), Color("ff8fb8"), Color("8fb8ff"), Color("ff6a4a")]
+	var sn: int = map.season
+	var flower_p := 0.35
+	if sn == 1:
+		# осень: мало цветов, зато красные грибы и опавшие листья
+		fcols = [Color("c0392b"), Color("e08a1e"), Color("f0c040"), Color("a0522d")]
+		flower_p = 0.2
+	elif sn == 2:
+		# зима: вместо цветов — голубые льдинки и сугробики
+		fcols = [Color("e8f4ff"), Color("bfe3ff"), Color("ffffff")]
+		flower_p = 0.18
 	for z in map.h:
 		for x in map.w:
 			var p := Vector2i(x, z)
 			var tt: int = map.get_t(p)
 			var y: float = map.height(p)
 			if tt == M.GRASS or tt == M.HILL or tt == M.HILL2:
-				if rng.randf() < 0.35:
+				if rng.randf() < flower_p:
 					var c: Color = fcols[rng.randi() % fcols.size()]
 					for k in rng.randi_range(1, 3):
 						var off := Vector3(rng.randf_range(-0.42, 0.42), 0.03, rng.randf_range(-0.42, 0.42))
@@ -206,6 +237,10 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 					for k in rng.randi_range(1, 3):
 						var off := Vector3(rng.randf_range(-0.42, 0.42), 0.05, rng.randf_range(-0.42, 0.42))
 						var g := Color(rng.randf_range(0.3, 0.42), rng.randf_range(0.6, 0.75), rng.randf_range(0.22, 0.3))
+						if sn == 1:
+							g = Color(rng.randf_range(0.7, 0.9), rng.randf_range(0.4, 0.6), rng.randf_range(0.1, 0.2))
+						elif sn == 2:
+							g = Color(rng.randf_range(0.82, 0.95), rng.randf_range(0.88, 0.96), 1.0)
 						tufts.append([Transform3D(Basis().rotated(Vector3.UP, rng.randf() * TAU), Vector3(x, y, z) + off), g, p])
 			elif tt == M.ROCK:
 				var low: bool = y < 0.5
@@ -214,7 +249,10 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 					var s := rng.randf_range(0.8, 1.3) if low else rng.randf_range(0.6, 1.1)
 					var b := Basis().rotated(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, s * 0.7, s))
 					var gc := rng.randf_range(0.42, 0.55)
-					boulders.append([Transform3D(b, Vector3(x, y, z) + off), Color(gc, gc * 0.97, gc * 0.92), p])
+					var bc := Color(gc, gc * 0.97, gc * 0.92)
+					if sn == 2:
+						bc = bc.lerp(Color(0.92, 0.95, 1.0), 0.45)
+					boulders.append([Transform3D(b, Vector3(x, y, z) + off), bc, p])
 	var vm := StandardMaterial3D.new()
 	vm.vertex_color_use_as_albedo = true
 	vm.vertex_color_is_srgb = true

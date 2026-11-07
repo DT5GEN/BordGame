@@ -20,6 +20,9 @@ var campfires: Array = []
 var objects: Array = []   # [{type, pos, kind?, content?}]
 var rng := RandomNumberGenerator.new()
 var _taken := {}
+var season := 0          # 0 лето, 1 осень, 2 зима (в кампании)
+var hard := 1.0          # во сколько раз больше зверей
+var wolf_share := 0.55   # доля волков среди лесных зверей
 
 func inb(p: Vector2i) -> bool:
 	return p.x >= 0 and p.y >= 0 and p.x < w and p.y < h
@@ -349,15 +352,15 @@ func _place_objects(np: int) -> void:
 			_take(p)
 			objects.append({"type": "chest", "pos": p, "content": "loot"})
 	# Звери в лесах
-	for i in int(w * h / 140.0):
+	for i in int(w * h / 140.0 * hard):
 		for attempt in 20:
 			var p := Vector2i(rng.randi_range(1, w - 2), rng.randi_range(7, gorge.x - 2))
 			if get_t(p) == FOREST and _free(p):
 				_take(p)
-				objects.append({"type": "beast", "pos": p, "kind": "wolf" if rng.randf() < 0.55 else "boar", "shard": false})
+				objects.append({"type": "beast", "pos": p, "kind": "wolf" if rng.randf() < wolf_share else "boar", "shard": false})
 				break
 	# Медведи — редкие и сильные
-	for i in maxi(1, int(w * h / 450.0)):
+	for i in maxi(1, int(w * h / 450.0 * hard)):
 		for attempt in 40:
 			var p := Vector2i(rng.randi_range(1, w - 2), rng.randi_range(int(h * 0.25), gorge.x - 2))
 			if get_t(p) == FOREST and _free(p):
