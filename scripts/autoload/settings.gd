@@ -188,12 +188,25 @@ func play_voice(name: String) -> float:
 		if st != null:
 			voice.stream = st
 			voice.play()
+			# музыку приглушаем, пока звучит голос
+			AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Music"), linear_to_db(maxf(music_vol * 0.3, 0.0001)))
+			if not voice.finished.is_connected(apply_volumes):
+				voice.finished.connect(apply_volumes)
 			return st.get_length()
 	return 0.0
+
+## Тайминги фраз озвучки из voice/<name>.json: {"starts": [...], "end": N}
+func voice_timing(name: String) -> Dictionary:
+	var path := "res://voice/%s.json" % name
+	if not FileAccess.file_exists(path):
+		return {}
+	var d = JSON.parse_string(FileAccess.get_file_as_string(path))
+	return d if typeof(d) == TYPE_DICTIONARY else {}
 
 func stop_voice() -> void:
 	if voice:
 		voice.stop()
+	apply_volumes()
 
 # ------------------------------------------------------------ звуки
 func play(name: String, pitch_jitter := 0.06) -> void:

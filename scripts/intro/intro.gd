@@ -198,7 +198,15 @@ func _wait(t: float) -> void:
 
 func _run() -> void:
 	var vl: float = Settings.play_voice("intro")
-	if vl > 5.0:
+	var tm: Dictionary = Settings.voice_timing("intro")
+	if vl > 5.0 and tm.has("starts") and (tm["starts"] as Array).size() == durs.size():
+		# субтитры и сцены точно по паузам в озвучке
+		var st: Array = tm["starts"]
+		var end_t: float = float(tm.get("end", vl))
+		for i in durs.size():
+			var nxt: float = float(st[i + 1]) if i + 1 < st.size() else end_t + 1.5
+			durs[i] = nxt - float(st[i])
+	elif vl > 5.0:
 		var total := 0.0
 		for d in durs:
 			total += d

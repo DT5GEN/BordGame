@@ -393,12 +393,13 @@ func _bench() -> void:
 func _introtest() -> void:
 	show_intro()
 	var it = current
-	var marks := [2.0, 9.0, 17.0, 20.5, 27.0, 33.0, 40.0, 46.0]
+	var marks := [3.0, 10.0, 17.0, 22.0, 25.0, 33.0, 38.0, 43.0]
 	var t := 0.0
 	for i in marks.size():
 		await _wait(marks[i] - t)
 		t = marks[i]
 		await _shot("intro_%02d" % i)
+		print("INTRO t=", t, " sub=", it.sub_lbl.text.left(40))
 	await _wait(3.0)
 	await _shot("intro_end")
 	print("INTRO DONE")

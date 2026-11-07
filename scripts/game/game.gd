@@ -1817,7 +1817,15 @@ func _victory(p: Dictionary) -> void:
 	tw.parallel().tween_property(self, "cam_dist", 6.5, 1.0)
 	await get_tree().create_timer(1.1).timeout
 	var voice_len: float = Settings.play_voice("finale")
-	hud.subtitle("Осколки вернулись на свои места…", 3.0)
+	var fl := ["Осколки вернулись на свои места…", "Гора открывает свою тайну…", "Сердце Долины нашло своего героя!"]
+	var ft: Dictionary = Settings.voice_timing("finale")
+	var fs: Array = ft.get("starts", [0.0, 3.0, 5.6]) if voice_len > 0.0 else [0.0, 3.0, 5.6]
+	var fend: float = float(ft.get("end", 8.5)) if voice_len > 0.0 else 8.5
+	for i in 3:
+		var t0: float = float(fs[i])
+		var t1: float = float(fs[i + 1]) if i < 2 else fend + 0.6
+		get_tree().create_timer(t0).timeout.connect(hud.subtitle.bind(fl[i], maxf(1.0, t1 - t0 - 0.7)))
+	var t_start := Time.get_ticks_msec()
 	# кристаллы летят в гнёзда
 	for i in 3:
 		var sock: MeshInstance3D = shrine_node.get_node("Socket%d" % i)
@@ -1834,7 +1842,6 @@ func _victory(p: Dictionary) -> void:
 		await get_tree().create_timer(0.25).timeout
 	# гора дрожит, створки разъезжаются
 	Settings.play("night", 0.0)
-	hud.subtitle("Гора открывает свою тайну…", 3.0)
 	var base := shrine_node.position
 	var shake := create_tween()
 	for k in 10:
@@ -1857,8 +1864,8 @@ func _victory(p: Dictionary) -> void:
 	tw4.parallel().tween_property(tr3, "position", Vector3(0, 0.6, -0.2), 1.2).set_trans(Tween.TRANS_BACK)
 	tw4.parallel().tween_property(tr3, "rotation:y", TAU, 2.0)
 	Settings.play("victory", 0.0)
-	hud.subtitle("Сердце Долины нашло своего героя!", 3.5)
-	await get_tree().create_timer(maxf(2.6, voice_len - 7.0)).timeout
+	var elapsed := (Time.get_ticks_msec() - t_start) / 1000.0
+	await get_tree().create_timer(maxf(2.6, fend + 1.0 - elapsed)).timeout
 	hud.show_victory(p)
 
 
