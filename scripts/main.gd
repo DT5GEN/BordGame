@@ -93,6 +93,10 @@ func _ready() -> void:
 		await _wait(1.0)
 		var all: Array = []
 		_collect_buttons(current, "Питомец", all)
+		current._set_count(5)
+		await _wait(0.5)
+		all.clear()
+		_collect_buttons(current, "Питомец", all)
 		print("PET checkboxes: ", all.size())
 		if all.size() > 1:
 			all[1].button_pressed = true   # питомец второму игроку, выбран первый
@@ -679,6 +683,13 @@ func _nettest() -> void:
 		await get_tree().create_timer(0.5).timeout
 		var code := FileAccess.get_file_as_string(code_file).strip_edges()
 		Net.join_room(url, code, {"name": "Гость", "hero": 3, "ability": 2})
+	Net.emote.connect(func(c, e): print("EMOTE_RX ", c, " ", e))
+	var menu_at := 0
+	for a in args:
+		if a.begins_with("--menu-rejoin="):
+			menu_at = int(a.substr(14))
+	var did_emote := false
+	var did_menu := false
 	var t_start := Time.get_ticks_msec()
 	var rnd := RandomNumberGenerator.new()
 	rnd.randomize()
@@ -688,6 +699,17 @@ func _nettest() -> void:
 			print("KILL")
 			OS.kill(OS.get_process_id())
 		var g = current
+		if role == "host" and not did_emote and g != null and g.get("net") and g.get("hud") != null and Time.get_ticks_msec() - t_start > 12000:
+			did_emote = true
+			g.send_emote(2)
+		if menu_at > 0 and not did_menu and Time.get_ticks_msec() - t_start > menu_at * 1000 and g != null and g.get("net") and g.get("hud") != null:
+			did_menu = true
+			print("MENU-EXIT")
+			g.exit_to_menu.emit()
+			await get_tree().create_timer(2.0).timeout
+			print("SESSION kept=", not Net.saved_session().is_empty())
+			Net.rejoin()
+			continue
 		if g != null and g.get("net") and g != hooked[0] and g.get("hud") != null:
 			# каждая новая карта кампании: подключаем проверку «у всех одно и то же»
 			hooked[0] = g

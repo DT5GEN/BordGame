@@ -2,6 +2,7 @@ extends Node
 ## Связь с сервером-комнатой по WebSocket. Игру сервер не считает:
 ## он только раздаёт всем действия игроков в одном порядке.
 
+signal emote(cid: int, e: int)
 signal lobby(data: Dictionary)
 signal started(data: Dictionary)
 signal act(msg: Dictionary)
@@ -110,6 +111,18 @@ func _save_session() -> void:
 	var f := FileAccess.open(SESSION_PATH, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify({"url": url, "room": room, "token": token}))
+
+## Выйти в меню, не бросая игру: связь закрываем без «leave», ключ комнаты оставляем, чтобы вернуться кнопкой «Вернуться в игру».
+func pause() -> void:
+	if ws != null:
+		ws.close()
+	ws = null
+	state = "off"
+	_joined = false
+	in_game = false
+	acts_log = []
+	_log_last = 0
+	caught = false
 
 func disconnect_now() -> void:
 	if ws != null:
@@ -222,6 +235,8 @@ func _handle(txt: String) -> void:
 			for e in m.get("acts", []):
 				_log_act(e)
 				act.emit(e)
+		"emote":
+			emote.emit(int(m.get("cid", -1)), int(m.get("e", 0)))
 		"caught_up":
 			caught = true
 			caught_up.emit()

@@ -231,21 +231,33 @@ void fragment() {
 			_refresh())
 		dh.add_child(b)
 		die_btns[d] = b
+	var opt_row := HBoxContainer.new()
+	opt_row.add_theme_constant_override("separation", 8)
+	v.add_child(opt_row)
 	team_cb = CheckBox.new()
-	team_cb.text = "Командная игра: Красные против Синих"
+	team_cb.text = "Команды: Красные против Синих"
+	team_cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	team_cb.button_pressed = team_mode
 	team_cb.add_theme_font_size_override("font_size", 19)
 	team_cb.toggled.connect(func(on):
 		team_mode = on
 		_refresh())
-	v.add_child(team_cb)
+	opt_row.add_child(team_cb)
 	camp_cb = CheckBox.new()
 	camp_cb.text = "Кампания: Лето, Осень, Зима и дракон"
 	camp_cb.button_pressed = DB.last_config.has("camp")
 	camp_cb.add_theme_font_size_override("font_size", 19)
 	v.add_child(camp_cb)
 	var rs := ScrollContainer.new()
-	rs.custom_minimum_size = Vector2(0, 150)
+	rs.custom_minimum_size = Vector2(0, 190)
+	# широкий ползунок прокрутки, чтобы попадать пальцем
+	var vsb := rs.get_v_scroll_bar()
+	vsb.custom_minimum_size = Vector2(34, 0)
+	var grab := Style.sb(Color(Style.GOLD, 0.75), Style.GOLD, 0, 10, 0)
+	vsb.add_theme_stylebox_override("grabber", grab)
+	vsb.add_theme_stylebox_override("grabber_highlight", Style.sb(Style.GOLD, Color.WHITE, 0, 10, 0))
+	vsb.add_theme_stylebox_override("grabber_pressed", Style.sb(Style.GOLD.lightened(0.2), Color.WHITE, 0, 10, 0))
+	vsb.add_theme_stylebox_override("scroll", Style.sb(Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 0, 10, 0))
 	rs.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(rs)
 	rows_box = VBoxContainer.new()
@@ -253,10 +265,17 @@ void fragment() {
 	rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rs.add_child(rows_box)
 	rules_cb = CheckBox.new()
-	rules_cb.text = "Показать свиток с правилами в начале"
+	rules_cb.text = "Показать свиток"
 	rules_cb.button_pressed = DB.last_config.is_empty()
 	rules_cb.add_theme_font_size_override("font_size", 19)
-	v.add_child(rules_cb)
+	opt_row.add_child(rules_cb)
+	if not Net.saved_session().is_empty():
+		var rj := Style.button("↩ Вернуться в начатую сетевую игру", 22)
+		rj.add_theme_stylebox_override("normal", Style.sb(Color("2f5a3a"), Style.GOLD, 2, 12, 10))
+		rj.pressed.connect(func():
+			net_lobby.open()
+			net_lobby.rejoin_btn.pressed.emit())
+		v.add_child(rj)
 	var bh := HBoxContainer.new()
 	v.add_child(bh)
 	var go := Style.button("В путь!", 34, 210)

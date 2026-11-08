@@ -188,7 +188,7 @@ func _build_room(parent: VBoxContainer) -> void:
 		_push_cfg())
 	host_box.add_child(team_cb)
 	camp_cb = CheckBox.new()
-	camp_cb.text = "Кампания: Лето, Осень, Зима (3 карты и сюжет)"
+	camp_cb.text = "Кампания: Лето, Осень, Зима и дракон"
 	camp_cb.add_theme_font_size_override("font_size", 18)
 	camp_cb.toggled.connect(func(on):
 		camp_on = on

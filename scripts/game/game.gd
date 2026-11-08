@@ -92,6 +92,7 @@ var v_explored := {}
 var v_discovered := {}
 var _net_over_banner: Label = null
 var _status_cb := Callable()
+const EMOTES := ["Я тут!", "Быстрее!", "Жду вас", "Ура!", "Помогите!", "Спасибо", "Смотри!", "Мне пора"]
 var _chaining := false      # переходим на следующую карту: связь с сервером не рвём
 
 # --- кампания «Времена года»
@@ -222,6 +223,7 @@ func _ready() -> void:
 	if net:
 		_last_seq = int(cfg.get("start_seq", 0))
 		Net.act.connect(_on_net_act)
+		Net.emote.connect(_on_emote)
 		Net.caught_up.connect(_on_caught_up)
 		_status_cb = func(t): hud.toast(t, Style.GOLD, 2.5)
 		Net.status.connect(_status_cb)
@@ -244,10 +246,15 @@ func _exit_tree() -> void:
 			Net.act.disconnect(_on_net_act)
 		if _status_cb.is_valid() and Net.status.is_connected(_status_cb):
 			Net.status.disconnect(_status_cb)
+		if Net.emote.is_connected(_on_emote):
+			Net.emote.disconnect(_on_emote)
 		if _chaining:
 			return
 		Engine.time_scale = 1.0
-		Net.leave()
+		if game_over:
+			Net.leave()
+		else:
+			Net.pause()      # вышли в меню посреди игры: ключ комнаты оставляем, можно вернуться
 		DB.restore_own_balance()
 
 func _setup_env() -> void:
@@ -791,6 +798,17 @@ func _exec(a: Dictionary) -> void:
 		"skip":
 			busy = false
 			await end_turn()
+
+func send_emote(i: int) -> void:
+	Net.send({"t": "emote", "e": i})
+
+func _on_emote(cid: int, e: int) -> void:
+	if not _seat_of.has(cid) or e < 0 or e >= EMOTES.size():
+		return
+	var q: Dictionary = players[int(_seat_of[cid])]
+	_float_text(q.node, EMOTES[e], q.color.lightened(0.3))
+	if hud:
+		hud.toast("%s: %s" % [q.name, EMOTES[e]], q.color.lightened(0.35), 2.5)
 
 func _on_net_act(m: Dictionary) -> void:
 	var seq := int(m.get("seq", 0))

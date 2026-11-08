@@ -232,6 +232,15 @@ async def handle(ws):
                 a = m.get("a")
                 if isinstance(a, dict):
                     await broadcast_act(room, a, c.cid)
+            elif t == "emote" and room.started:
+                # быстрая реплика («Я тут!», «Быстрее!»): не часть игры, просто раздаём всем в комнате
+                if time.time() - getattr(c, "last_emote", 0) >= 0.7:
+                    c.last_emote = time.time()
+                    try:
+                        e = int(m.get("e", 0))
+                    except (TypeError, ValueError):
+                        e = 0
+                    await broadcast(room, {"t": "emote", "cid": c.cid, "e": max(0, min(31, e))})
             elif t == "leave":
                 break
     except websockets.ConnectionClosed:

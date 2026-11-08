@@ -56,6 +56,7 @@ var modal: ColorRect
 var alert_closable := false
 var banner: VBoxContainer
 var view_btn: Button
+var emote_panel: PanelContainer
 var confirm_bar: PanelContainer
 var current_qte = null
 var sub_lbl: Label
@@ -193,6 +194,27 @@ func _build_top() -> void:
 	var fb := Style.glass_button(Style.button("К герою", 17))
 	fb.pressed.connect(func(): focus_requested.emit())
 	right2.add_child(fb)
+	if game.net:
+		var eb := Style.glass_button(Style.button("Связь", 17), Style.TEAL)
+		eb.pressed.connect(func(): emote_panel.visible = not emote_panel.visible)
+		right2.add_child(eb)
+		emote_panel = PanelContainer.new()
+		emote_panel.visible = false
+		emote_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		emote_panel.position = Vector2(-372, 96)
+		emote_panel.add_theme_stylebox_override("panel", Style.sb(Style.GLASS_DARK, Style.TEAL, 2, 14, 8))
+		root.add_child(emote_panel)
+		var eg := GridContainer.new()
+		eg.columns = 2
+		eg.add_theme_constant_override("h_separation", 6)
+		eg.add_theme_constant_override("v_separation", 6)
+		emote_panel.add_child(eg)
+		for ei in game.EMOTES.size():
+			var ebb := Style.button(game.EMOTES[ei], 20, 170)
+			ebb.pressed.connect(func():
+				game.send_emote(ei)
+				emote_panel.visible = false)
+			eg.add_child(ebb)
 	var sbtn := Style.glass_button(Style.button("Настройки", 18))
 	sbtn.pressed.connect(func(): settings_requested.emit())
 	right.add_child(sbtn)
@@ -355,7 +377,9 @@ func refresh() -> void:
 	var w: String = game.weather
 	time_lbl.text = "Раунд %d  •  %s  %s  •  %s" % [game.round_no, game.clock_text(), game.time_name(), w]
 	if game.camp:
-		time_lbl.text = "%s %d/3  •  " % [game.season_d["name"], game.chapter + 1] + time_lbl.text
+		time_lbl.text = "%s %d/%d  •  " % [game.season_d["name"], game.chapter + 1, Camp.CHAPTERS] + time_lbl.text
+	if game.boss:
+		time_lbl.text = "Пещера дракона  •  Круг %d из %d" % [mini(game.round_no, Camp.BOSS_ROUNDS), Camp.BOSS_ROUNDS]
 	if game.net and game.cur != game.my_seat:
 		time_lbl.text += "  •  Ходит: " + game.players[game.cur].name
 	steps_lbl.text = "Шагов: %d" % game.steps_left
