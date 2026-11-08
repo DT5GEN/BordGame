@@ -90,7 +90,14 @@ func _ready() -> void:
 		get_tree().quit()
 	elif "--menutest" in OS.get_cmdline_user_args():
 		show_menu()
-		await _wait(1.5)
+		await _wait(1.0)
+		var all: Array = []
+		_collect_buttons(current, "Питомец", all)
+		print("PET checkboxes: ", all.size())
+		if all.size() > 1:
+			all[1].button_pressed = true   # питомец второму игроку, выбран первый
+		await _wait(0.6)
+		print("PET selected=", current.selected, " has_fox=", current.preview_hero.get_child_count())
 		await _shot("menu")
 		get_tree().quit()
 	elif "--bosstest" in OS.get_cmdline_user_args():

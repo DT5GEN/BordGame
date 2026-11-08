@@ -351,7 +351,12 @@ func _make_row(i: int) -> Control:
 	pet.button_pressed = s["pet"]
 	pet.tooltip_text = "Питомец достаётся победителю прошлой партии (+1 к обзору)"
 	pet.add_theme_font_size_override("font_size", 17)
-	pet.toggled.connect(func(on): slots[i]["pet"] = on)
+	pet.toggled.connect(func(on):
+		slots[i]["pet"] = on
+		if selected != i:
+			_select(i)       # переключаемся на этого героя: заодно перерисует превью
+		else:
+			_update_preview())
 	h.add_child(pet)
 	return pc
 
