@@ -23,6 +23,11 @@ import websockets
 VERSION = 1
 MAX_PLAYERS = 10
 MAX_ROOMS = 100
+MAX_PER_IP = 8               # одновременных соединений с одного адреса (семья дома — это один адрес)
+MAX_MSG_PER_SEC = 40         # быстрее живой игры в разы; чаще — отключаем
+FIRST_MSG_TIMEOUT = 10       # столько секунд даём новому соединению назвать комнату
+bans: dict = {}              # адрес -> до какого времени не пускаем
+per_ip: dict = {}
 ROOM_TTL = 6 * 3600          # пустую комнату держим 6 часов (на случай переподключения)
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ"   # без I и O, чтобы не путать с 1 и 0
 log = logging.getLogger("oskolki")
@@ -109,8 +114,30 @@ def apply_profile(c, m):
 async def handle(ws):
     c = None
     room = None
+    ip = ws.remote_address[0] if ws.remote_address else "?"
+    now = time.time()
+    if bans.get(ip, 0) > now or per_ip.get(ip, 0) >= MAX_PER_IP:
+        await ws.close(1008, "too many connections")
+        return
+    per_ip[ip] = per_ip.get(ip, 0) + 1
+    stamps: list = []
+
+    async def _kick_if_silent():
+        await asyncio.sleep(FIRST_MSG_TIMEOUT)
+        if c is None:
+            await ws.close(1008, "no hello")
+    guard = asyncio.create_task(_kick_if_silent())
     try:
         async for raw in ws:
+            t_now = time.time()
+            stamps.append(t_now)
+            while stamps and stamps[0] < t_now - 1.0:
+                stamps.pop(0)
+            if len(stamps) > MAX_MSG_PER_SEC:
+                bans[ip] = t_now + 60
+                log.info("flood от %s: отключаем на минуту", ip)
+                await ws.close(1008, "flood")
+                return
             if len(raw) > 200_000:
                 continue
             try:
@@ -210,6 +237,8 @@ async def handle(ws):
     except websockets.ConnectionClosed:
         pass
     finally:
+        guard.cancel()
+        per_ip[ip] = max(0, per_ip.get(ip, 1) - 1)
         if c is not None and room is not None and c.ws is ws:
             c.online = False
             if not room.started:
@@ -242,7 +271,7 @@ async def janitor():
 
 async def main(port):
     asyncio.create_task(janitor())
-    async with websockets.serve(handle, "0.0.0.0", port, max_size=300_000, ping_interval=20, ping_timeout=30):
+    async with websockets.serve(handle, "0.0.0.0", port, max_size=300_000, ping_interval=20, ping_timeout=30, open_timeout=5):
         log.info("Сервер «Осколков Долины» слушает порт %d", port)
         await asyncio.Future()
 
