@@ -88,6 +88,11 @@ func _ready() -> void:
 		await _wait(0.5)
 		await _shot("hero_roll")
 		get_tree().quit()
+	elif "--menutest" in OS.get_cmdline_user_args():
+		show_menu()
+		await _wait(1.5)
+		await _shot("menu")
+		get_tree().quit()
 	elif "--bosstest" in OS.get_cmdline_user_args():
 		_bosstest.call_deferred()
 	elif "--cuttest" in OS.get_cmdline_user_args():

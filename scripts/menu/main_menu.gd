@@ -178,7 +178,7 @@ void fragment() {
 	pinfo.add_child(ability_txt)
 	# Левая панель
 	var panel := PanelContainer.new()
-	panel.position = Vector2(28, 20)
+	panel.position = Vector2(28, 12)
 	panel.custom_minimum_size = Vector2(640, 0)
 	add_child(panel)
 	var v := VBoxContainer.new()
@@ -186,7 +186,7 @@ void fragment() {
 	panel.add_child(v)
 	var t := Style.outlined(Style.label("Осколки Долины", 56, Style.GOLD, Style.font_title), 8)
 	v.add_child(t)
-	v.add_child(Style.label("Пошаговое приключение на одном телефоне • прототип 0.1", 18, Color(Style.PARCH, 0.7)))
+	v.add_child(Style.label("Пошаговое приключение • версия 0.7", 18, Color(Style.PARCH, 0.7)))
 	var ch := HBoxContainer.new()
 	v.add_child(ch)
 	ch.add_child(Style.label("Игроков:", 24, Style.PARCH, Style.font_bold))
@@ -240,12 +240,12 @@ void fragment() {
 		_refresh())
 	v.add_child(team_cb)
 	camp_cb = CheckBox.new()
-	camp_cb.text = "Кампания: Лето, Осень, Зима (3 карты и сюжет)"
+	camp_cb.text = "Кампания: Лето, Осень, Зима и дракон"
 	camp_cb.button_pressed = DB.last_config.has("camp")
 	camp_cb.add_theme_font_size_override("font_size", 19)
 	v.add_child(camp_cb)
 	var rs := ScrollContainer.new()
-	rs.custom_minimum_size = Vector2(0, 250)
+	rs.custom_minimum_size = Vector2(0, 150)
 	rs.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(rs)
 	rows_box = VBoxContainer.new()
