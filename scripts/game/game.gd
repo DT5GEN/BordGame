@@ -104,6 +104,19 @@ var _camp_scores: Array = []
 var _camp_wins: Array = []
 var _camp_win_ids: Array = []
 var _snow := false
+# --- босс (глава Camp.BOSS)
+var boss := false
+var boss_hp := 0
+var boss_max := 0
+var boss_dmg: Array = []
+var boss_node: Node3D
+var boss_tele: Array = []	   # клетки, куда дракон ударит в конце круга
+var boss_tele_kind := ""
+var boss_tele_node: Node3D
+var boss_killer := -1
+var boss_defeated := false
+const BOSS_POWER := 4
+const BOSS_HIT := 3
 
 var _press := false
 var _press_pos := Vector2.ZERO
@@ -142,6 +155,10 @@ func _ready() -> void:
 		rng.seed = map_code * 7919 + 17   # у всех клиентов одинаковая «случайность»
 		for i in cfg["players"].size():
 			_seat_of[int(cfg["players"][i]["cid"])] = i
+	boss = camp and chapter == Camp.BOSS
+	if boss:
+		map.arena = true
+		sz = Vector2i(17, 21)
 	if camp:
 		map.season = chapter
 		map.hard = float(season_d["hard"])
@@ -168,6 +185,12 @@ func _ready() -> void:
 		# каждая следующая карта жёстче: ночь наступает раньше, тьма ползёт быстрее
 		hours_per_round *= 1.0 + 0.12 * chapter
 		dark_speed += chapter
+	if boss:
+		hours_per_round = 0.25	 # в пещере ночи нет: время поджимает дракон, а не закат
+		boss_max = 8 + 4 * players.size()
+		boss_hp = boss_max
+		boss_dmg.resize(players.size())
+		boss_dmg.fill(0)
 	hud = HUD.new()
 	hud.game = self
 	add_child(hud)
@@ -286,15 +309,24 @@ func _spawn_objects() -> void:
 					n.add_child(sh)
 			"event":
 				n = Models.event_stone()
+			"boss":
+				n = Models.dragon()
+				boss_node = n
 		n.position = map.world_pos(p)
 		if d["type"] == "campfire":
 			n.position += Vector3(0.5, 0, 0.5)
 		entities.add_child(n)
 		d["node"] = n
+		if d["type"] == "boss":
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					objects[p + Vector2i(dx, dz)] = d
+			continue
 		objects[p] = d
 	shrine_node = Models.mountain_gate()
 	shrine_node.position = map.world_pos(map.shrine)
 	entities.add_child(shrine_node)
+	shrine_node.visible = not boss
 
 func _setup_players() -> void:
 	var list: Array = cfg["players"]
@@ -1064,11 +1096,17 @@ func end_turn() -> void:
 	_clear_highlight()
 	cur = (cur + 1) % players.size()
 	if cur == 0:
-		_advance_round()
+		await _advance_round()
+		if game_over:
+			return
 	await begin_turn()
 
 func _advance_round() -> void:
 	round_no += 1
+	if boss:
+		await _boss_turn()
+		if game_over:
+			return
 	hour = minf(hour + hours_per_round, 28.0)
 	if not night and hour >= 21.0:
 		night = true
@@ -1193,6 +1231,8 @@ func _update_darkness() -> void:
 
 # ================================================================= ВИДИМОСТЬ
 func vision(p: Dictionary) -> int:
+	if boss:
+		return 40	  # в пещере светло от пламени: видно всю арену
 	var tt: int = map.get_t(p.pos)
 	var r := 3
 	if tt == MapGen.HILL:
@@ -1430,7 +1470,7 @@ func _recalc() -> void:
 			prev[n] = c
 			var o = objects.get(n)
 			var blocked := false
-			if o != null and o["type"] in ["beast", "chest", "event"]:
+			if o != null and o["type"] in ["beast", "chest", "event", "boss"]:
 				blocked = true
 			var opp := _enemy_at(n, cur)
 			if opp >= 0 and team_sees(n):
@@ -1529,6 +1569,11 @@ func _walk(path: Array) -> void:
 			_face(p, tile)
 			steps_left -= c
 			await _fight_beast(p, tile, o)
+			break
+		if o != null and o["type"] == "boss":
+			_face(p, tile)
+			steps_left -= c
+			await _fight_boss(p, o)
 			break
 		var eu = _unit_at(tile)
 		if eu != null and is_enemy(cur, eu["owner"]) and not _untouchable(eu):
@@ -2020,6 +2065,282 @@ var _fight_a: Node3D
 var _fight_b: Node3D
 var _fight_cam := 8.5
 var _fight_yaw := 0.0
+
+
+# ================================================================= БОСС
+func _boss_tile(t: Vector2i) -> bool:
+	return absi(t.x - map.boss_pos.x) <= 1 and absi(t.y - map.boss_pos.y) <= 1
+
+func _boss_phase2() -> bool:
+	return boss_hp * 2 <= boss_max
+
+func _fight_boss(p: Dictionary, o: Dictionary) -> void:
+	_stop_walk(p)
+	boss_node.rotation.y = 0.0
+	_begin_fight(p.node, boss_node)
+	var info := "Здоровье: %d из %d • Урон: %d" % [boss_hp, boss_max, BOSS_HIT + (1 if _boss_phase2() else 0)]
+	var res: Dictionary = await _ask(cur, "battle", func(): return await hud.battle(p.name, "Огненный дракон", info, "Чтобы попасть, нужно набрать %d или больше" % BOSS_POWER, false, p.color, p.ability == "agile"), "%s бьёт дракона…" % p.name, DEFAULT_BATTLE, true)
+	var total := int(res["total"])
+	var win: bool = total >= BOSS_POWER
+	var dmg := 0
+	if win:
+		dmg = maxi(1, int(round(float(p.dmg_mult)))) + int(p.wolves) + (1 if total >= BOSS_POWER + 3 else 0)
+		dmg = mini(dmg, boss_hp)
+	await hud.battle_finish(("Попал! Дракон теряет %d." % dmg) if win else "Мимо... %d против %d. Дракон огрызается." % [total, BOSS_POWER], win)
+	_end_fight()
+	if win:
+		boss_hp -= dmg
+		boss_dmg[p.idx] += dmg
+		_float_text(boss_node, "−%d" % dmg, Style.GOLD)
+		var tw := create_tween()
+		tw.tween_property(boss_node, "position:x", boss_node.position.x + 0.12, 0.05)
+		tw.tween_property(boss_node, "position:x", boss_node.position.x - 0.12, 0.1)
+		tw.tween_property(boss_node, "position:x", boss_node.position.x, 0.05)
+		hud.refresh()
+		if boss_hp <= 0:
+			boss_killer = p.idx
+			boss_defeated = true
+			await _boss_end()
+			return
+		if _boss_phase2() and boss_hp + dmg > boss_max / 2:
+			hud.big_banner("Дракон в ярости!", "Теперь он бьёт сильнее и по двум местам")
+	else:
+		var d2 := BOSS_HIT + (1 if _boss_phase2() else 0) + (1 if p.now_vuln or p.vuln > 0 else 0)
+		_damage(p, d2)
+		hud.toast("Дракон огрызнулся: −%d HP" % d2, Style.RED, 3.0)
+
+## В конце круга дракон бьёт по клеткам, отмеченным заранее, и выбирает новые.
+func _boss_turn() -> void:
+	busy = true
+	hud.set_phase("busy")
+	var dmg := BOSS_HIT + (1 if _boss_phase2() else 0)
+	if not boss_tele.is_empty():
+		follow = null
+		cam_goal = boss_node.position + Vector3(0, 0.5, 3.0)
+		await get_tree().create_timer(0.5).timeout
+		await _boss_strike(dmg)
+	_boss_clear_tele()
+	if boss_defeated or game_over:
+		busy = false
+		return
+	if round_no > Camp.BOSS_ROUNDS:
+		await _boss_end()
+		busy = false
+		return
+	_boss_plan()
+	if round_no == Camp.BOSS_ROUNDS:
+		hud.toast("Последний круг! Если дракон устоит, он улетит.", Style.RED, 4.0)
+	else:
+		hud.toast("Круг %d из %d • Дракон готовит: %s" % [round_no, Camp.BOSS_ROUNDS, boss_tele_kind], Color("ff8a5a"), 3.5)
+	follow = players[0].node
+	busy = false
+
+func _boss_plan() -> void:
+	boss_tele.clear()
+	var kinds := ["Огненное дыхание", "Удар хвостом", "Огненный дождь"]
+	boss_tele_kind = kinds[rng.randi_range(0, kinds.size() - 1)]
+	var c: Vector2i = map.boss_pos
+	match boss_tele_kind:
+		"Огненное дыхание":
+			var cols: Array = []
+			var who: int = rng.randi_range(0, players.size() - 1)
+			cols.append(players[who].pos.x)
+			if _boss_phase2():
+				cols.append(clampi(players[(who + 1) % players.size()].pos.x, 1, map.w - 2))
+			for x in cols:
+				for dx in (range(-0, 1) if not _boss_phase2() else range(-0, 1)):
+					for z in range(c.y + 2, map.h - 1):
+						var t := Vector2i(int(x) + dx, z)
+						if map.passable(t) and not boss_tele.has(t):
+							boss_tele.append(t)
+		"Удар хвостом":
+			for z in range(c.y - 3, c.y + 4):
+				for x in range(c.x - 3, c.x + 4):
+					var t := Vector2i(x, z)
+					if map.inb(t) and map.passable(t) and not _boss_tile(t) and maxi(absi(x - c.x), absi(z - c.y)) <= (2 if not _boss_phase2() else 3):
+						boss_tele.append(t)
+		_:
+			var n := 7 + (4 if _boss_phase2() else 0) + players.size()
+			var tries := 0
+			while boss_tele.size() < n and tries < 200:
+				tries += 1
+				var t := Vector2i(rng.randi_range(1, map.w - 2), rng.randi_range(c.y + 2, map.h - 2))
+				if map.passable(t) and not boss_tele.has(t):
+					boss_tele.append(t)
+	_boss_show_tele()
+	# дракон поворачивает голову и набирает воздух
+	if boss_node:
+		var tw := create_tween()
+		tw.tween_property(boss_node, "scale", Vector3.ONE * 1.06, 0.3)
+		tw.tween_property(boss_node, "scale", Vector3.ONE, 0.3)
+
+func _boss_show_tele() -> void:
+	if boss_tele_node != null and is_instance_valid(boss_tele_node):
+		boss_tele_node.queue_free()
+	boss_tele_node = Node3D.new()
+	add_child(boss_tele_node)
+	for t in boss_tele:
+		var m := MeshInstance3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(0.92, 0.92)
+		q.orientation = PlaneMesh.FACE_Y
+		m.mesh = q
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(1.0, 0.18, 0.05, 0.5)
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.no_depth_test = false
+		m.material_override = mat
+		m.position = map.world_pos(t) + Vector3(0, 0.06, 0)
+		boss_tele_node.add_child(m)
+	var tw := boss_tele_node.create_tween().set_loops()
+	tw.tween_property(boss_tele_node, "position:y", 0.03, 0.4)
+	tw.tween_property(boss_tele_node, "position:y", 0.0, 0.4)
+
+func _boss_clear_tele() -> void:
+	if boss_tele_node != null and is_instance_valid(boss_tele_node):
+		boss_tele_node.queue_free()
+	boss_tele_node = null
+	boss_tele.clear()
+
+func _boss_strike(dmg: int) -> void:
+	Settings.play("night", 0.0)
+	var jaw := boss_node.get_node_or_null("Body/Neck/Head/Jaw")
+	var glow: OmniLight3D = boss_node.get_node_or_null("Glow")
+	if jaw:
+		var tj := create_tween()
+		tj.tween_property(jaw, "rotation:x", 0.6, 0.2)
+		tj.tween_interval(0.6)
+		tj.tween_property(jaw, "rotation:x", 0.0, 0.3)
+	if glow:
+		var tg := create_tween()
+		tg.tween_property(glow, "light_energy", 6.0, 0.2)
+		tg.tween_property(glow, "light_energy", 1.4, 0.8)
+	for t in boss_tele:
+		var f := MeshInstance3D.new()
+		var b := BoxMesh.new()
+		b.size = Vector3(0.7, 1.0, 0.7)
+		f.mesh = b
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(1.0, 0.45, 0.1, 0.85)
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.4, 0.05)
+		mat.emission_energy_multiplier = 2.5
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		f.material_override = mat
+		f.position = map.world_pos(t) + Vector3(0, 0.1, 0)
+		f.scale = Vector3(1, 0.05, 1)
+		add_child(f)
+		var tw := create_tween()
+		tw.tween_property(f, "scale:y", 1.4, 0.25)
+		tw.parallel().tween_property(f, "position:y", f.position.y + 0.6, 0.25)
+		tw.tween_property(mat, "albedo_color:a", 0.0, 0.5)
+		tw.tween_callback(f.queue_free)
+	await get_tree().create_timer(0.7).timeout
+	var any := false
+	for q in players:
+		if q.hp > 0 and boss_tele.has(q.pos):
+			any = true
+			var d: int = dmg + (1 if q.now_vuln or q.vuln > 0 else 0)
+			_damage(q, d)
+			hud.toast("%s обожжён: −%d HP" % [q.name, d], Style.RED, 2.5)
+	if not any:
+		hud.toast("Все увернулись!", Style.GREEN, 2.0)
+	await get_tree().create_timer(0.6).timeout
+	for q in players:
+		if q.hp <= 0:
+			await _respawn(q)
+
+## Конец боя: дракон повержен или улетел.
+func _boss_end() -> void:
+	game_over = true
+	_clear_highlight()
+	_boss_clear_tele()
+	hud.set_phase("over")
+	follow = null
+	cam_goal = boss_node.position + Vector3(0, 1.0, 0)
+	var tw0 := create_tween()
+	tw0.tween_property(self, "cam_pitch", deg_to_rad(28.0), 1.0)
+	tw0.parallel().tween_property(self, "cam_dist", 8.0, 1.0)
+	if boss_defeated:
+		Settings.play("victory", 0.0)
+		var tw := create_tween()
+		tw.tween_property(boss_node, "rotation:z", 0.5, 1.4).set_trans(Tween.TRANS_BOUNCE)
+		tw.parallel().tween_property(boss_node, "position:y", boss_node.position.y - 0.35, 1.4)
+		var glow: OmniLight3D = boss_node.get_node_or_null("Glow")
+		if glow:
+			tw.parallel().tween_property(glow, "light_energy", 0.0, 2.0)
+		await get_tree().create_timer(2.6).timeout
+	else:
+		var tw2 := create_tween()
+		tw2.tween_property(boss_node, "position:y", boss_node.position.y + 6.0, 2.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		await get_tree().create_timer(2.4).timeout
+	_boss_finish()
+
+## Очки главы: больше всех урона — 3, остальные, кто бил, — 1, последний удар даёт ещё 1.
+func _boss_finish() -> void:
+	var prev: Array = camp_data.get("scores", [])
+	var best := 0
+	for v in boss_dmg:
+		best = maxi(best, int(v))
+	var top_ids: Array = []
+	var pts: Array = []
+	var hit_count := 0
+	for q in players:
+		if int(boss_dmg[q.idx]) > 0:
+			hit_count += 1
+	for q in players:
+		var pt := 0
+		if boss_defeated:
+			if best > 0 and int(boss_dmg[q.idx]) == best:
+				pt = 3
+				top_ids.append(q.idx)
+			elif int(boss_dmg[q.idx]) > 0:
+				pt = 1
+			if q.idx == boss_killer:
+				pt += 1
+		pts.append(pt)
+	var scores: Array = []
+	for q in players:
+		scores.append((int(prev[q.idx]) if q.idx < prev.size() else 0) + pts[q.idx])
+	_camp_scores = scores
+	var wins: Array = camp_data.get("wins", []).duplicate()
+	wins.append(top_ids)
+	_camp_wins = wins
+	_camp_win_ids = top_ids
+	var got: Array = []
+	if boss_defeated:
+		for i in top_ids:
+			got.append({"who": players[i].name, "id": "dragon_bravest"})
+		if boss_killer >= 0:
+			got.append({"who": players[boss_killer].name, "id": "dragon_slayer"})
+		if hit_count == players.size() and players.size() > 1:
+			for q in players:
+				got.append({"who": q.name, "id": "dragon_team"})
+	var champ := 0
+	for v in scores:
+		champ = maxi(champ, int(v))
+	for q in players:
+		if int(scores[q.idx]) == champ:
+			got.append({"who": q.name, "id": "campaign_leader"})
+	for e in got:
+		if not net or players[my_seat].name == e["who"]:
+			Camp.grant(str(e["who"]), str(e["id"]))
+	_camp_ready = true
+	var rows: Array = []
+	for q in players:
+		rows.append({"name": q.name, "color": DB.TEAM_COLORS[q.team] if team_mode else q.color, "pts": pts[q.idx], "total": scores[q.idx],
+			"win": top_ids.has(q.idx), "team": q.team, "dmg": int(boss_dmg[q.idx])})
+	var names: Array = []
+	for q in players:
+		if int(scores[q.idx]) == champ:
+			names.append(q.name)
+	var wtxt := "Дракон повержен! Больше всех урона: %s" % ", ".join(top_ids.map(func(i): return players[i].name)) if boss_defeated else "Дракон улетел. Победить его не удалось"
+	hud.show_round_result({
+		"chapter": chapter, "final": true, "winner": wtxt, "wcol": Color("ff9a4a") if boss_defeated else Color("b0b0b0"), "rows": rows, "ach": got,
+		"story": Camp.AFTER[3] if boss_defeated else Camp.AFTER_FAIL, "next_name": "",
+		"team_mode": team_mode, "code": map_code, "champion": "Победитель кампании: %s (%d очк.)" % [", ".join(names), champ],
+	})
 
 func _begin_fight(a: Node3D, b: Node3D) -> void:
 	_fight_a = a
@@ -2703,12 +3024,12 @@ func _camp_finish(p: Dictionary) -> void:
 	var wins: Array = camp_data.get("wins", []).duplicate()
 	wins.append(_camp_win_ids)
 	_camp_wins = wins
-	var final: bool = chapter >= Camp.COUNT - 1
+	var final: bool = chapter >= Camp.CHAPTERS - 1
 	# ачивки
 	var got: Array = []
 	for i in _camp_win_ids:
 		var ids: Array = [["summer_hero", "autumn_hero", "winter_conqueror"][chapter]]
-		if final:
+		if chapter == Camp.COUNT - 1:
 			var every := true
 			for w in wins:
 				if not (w as Array).has(i):
@@ -2757,7 +3078,7 @@ func request_next() -> void:
 		_advance(0)
 
 func _advance(seq: int) -> void:
-	if chapter >= Camp.COUNT - 1:
+	if chapter >= Camp.CHAPTERS - 1:
 		return
 	_camp_ready = false
 	var c: Dictionary = cfg.duplicate(true)

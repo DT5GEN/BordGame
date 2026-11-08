@@ -4,6 +4,8 @@ extends Node
 const Menu = preload("res://scripts/menu/main_menu.gd")
 const Game = preload("res://scripts/game/game.gd")
 const Intro = preload("res://scripts/intro/intro.gd")
+const Camp = preload("res://scripts/game/campaign.gd")
+const Transition = preload("res://scripts/intro/transition.gd")
 
 var current: Node
 
@@ -86,6 +88,10 @@ func _ready() -> void:
 		await _wait(0.5)
 		await _shot("hero_roll")
 		get_tree().quit()
+	elif "--bosstest" in OS.get_cmdline_user_args():
+		_bosstest.call_deferred()
+	elif "--cuttest" in OS.get_cmdline_user_args():
+		_cuttest.call_deferred()
 	elif "--introtest" in OS.get_cmdline_user_args():
 		_introtest.call_deferred()
 	elif "--camptest" in OS.get_cmdline_user_args():
@@ -119,8 +125,20 @@ func start_game(cfg: Dictionary) -> void:
 	g.cfg = cfg
 	g.exit_to_menu.connect(show_menu)
 	g.restart_game.connect(_restart)
-	g.next_chapter.connect(start_game, CONNECT_DEFERRED)
+	g.next_chapter.connect(_chapter_cut, CONNECT_DEFERRED)
 	_switch(g)
+
+## Между главами кампании — заставка с озвучкой (в тестах и при возврате в игру по сети пропускается).
+func _chapter_cut(cfg: Dictionary) -> void:
+	var ch := int(cfg.get("camp", {}).get("chapter", 0))
+	var quick: bool = cfg.get("replay", false) or "--camptest" in OS.get_cmdline_user_args() or "--nettest" in OS.get_cmdline_user_args() or OS.has_environment("NO_CUT")
+	if ch < 1 or quick:
+		start_game(cfg)
+		return
+	var tr := Transition.new()
+	tr.kind = clampi(ch - 1, 0, 2)
+	tr.finished.connect(start_game.bind(cfg), CONNECT_DEFERRED)
+	_switch(tr)
 
 func _restart() -> void:
 	if current != null and current.get("net") == true:
@@ -493,6 +511,16 @@ func _bench() -> void:
 			RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)])
 	get_tree().quit()
 
+func _cuttest() -> void:
+	for kd in 3:
+		var tr := Transition.new()
+		tr.kind = kd
+		_switch(tr)
+		for i in 4:
+			await _wait(tr.length / 4.0 if i > 0 else 1.0)
+			await _shot("cut%d_%d" % [kd, i])
+	get_tree().quit()
+
 func _introtest() -> void:
 	show_intro()
 	var it = current
@@ -661,7 +689,7 @@ func _nettest() -> void:
 					g._victory(g.players[0]))
 		if g == null or not g.get("net") or g.get("hud") == null or g.game_over:
 			if g != null and g.get("game_over") == true:
-				if g.get("camp") and g.chapter < 2:
+				if g.get("camp") and g.chapter < 3:
 					if g._camp_ready and role == "host" and not g.get_meta("asked", false):
 						g.set_meta("asked", true)
 						logf.store_line("NEXT scores=%s" % [g._camp_scores])
@@ -700,7 +728,7 @@ func _nettest() -> void:
 			if g.rolled and best.x >= 0 and best.y > p.pos.y and g.steps_left > 0:
 				if "--beast" in args:
 					for bt in g.targets:
-						if g.objects.has(bt) and g.objects[bt]["type"] == "beast" and g.reach.has(bt):
+						if g.objects.has(bt) and g.objects[bt]["type"] in ["beast", "boss"] and g.reach.has(bt):
 							best = bt
 				g._cmd({"k": "walk", "t": [best.x, best.y]})
 			else:
@@ -827,4 +855,68 @@ func _camptest() -> void:
 			g.request_next()
 	print("CAMP ach=", load("res://scripts/game/campaign.gd").load_all())
 	print("CAMPTEST DONE")
+	get_tree().quit()
+
+
+func _bosstest() -> void:
+	var lose := OS.get_environment("BOSS_LOSE") == "1"
+	var list: Array = []
+	for i in 3:
+		list.append({"name": "Бот%d" % (i + 1), "hero": i, "pet": false, "slot": i, "team": 0, "ability": i})
+	var cfg: Dictionary = {"players": list, "size": Vector2i(24, 50), "show_rules": false, "seed": 777, "team_mode": false,
+		"camp": {"chapter": 3, "scores": [5, 7, 4], "wins": [[0], [1], [1]]}}
+	start_game(cfg)
+	await _wait(1.5)
+	var g = current
+	print("BOSS hp=", g.boss_hp, "/", g.boss_max, " map=", g.map.w, "x", g.map.h, " starts=", g.map.starts, " boss_pos=", g.map.boss_pos)
+	await _shot("b_story")
+	g.hud._story_closed.emit()
+	await _wait(1.0)
+	g.hud.overlay_pass.visible = false
+	g.hud.fast = true
+	g.cam_dist = 14.0
+	g.cam_pitch = deg_to_rad(48.0)
+	g.cam_target = g.map.world_pos(Vector2i(8, 11))
+	g.cam_goal = g.cam_target
+	g.cam_dist = 17.0
+	g.follow = null
+	await _wait(1.5)
+	await _shot("b_arena")
+	var bp: Vector2i = g.map.boss_pos
+	for k in 3:
+		g.rng.seed = 100 + k
+		g.boss_tele_kind = ""
+		g._boss_plan()
+		print("BOSS plan ", g.boss_tele_kind, " tiles=", g.boss_tele.size())
+		await _wait(0.6)
+		await _shot("b_tele%d" % k)
+		await g._boss_turn()
+		await _wait(0.4)
+	Engine.time_scale = 5.0
+	var guard := 0
+	while not g.game_over and guard < 400:
+		guard += 1
+		var q: Dictionary = g.players[guard % 3]
+		q.hp = q.max_hp
+		q.pos = bp + Vector2i(0, 2)
+		if lose:
+			g.round_no = Camp.BOSS_ROUNDS
+			await g._advance_round()
+			continue
+		await g._fight_boss(q, g.objects[bp])
+	Engine.time_scale = 1.0
+	print("BOSS end defeated=", g.boss_defeated, " killer=", g.boss_killer, " dmg=", g.boss_dmg, " iters=", guard)
+	var gg := 0
+	while not g._camp_ready and gg < 900:
+		await get_tree().process_frame
+		gg += 1
+	await _wait(1.0)
+	await _shot("b_result")
+	var wb := _find_button(g, "Что дальше?")
+	if wb:
+		wb.pressed.emit()
+		await _wait(0.4)
+		await _shot("b_result2")
+	print("BOSS scores=", g._camp_scores, " ach=", load("res://scripts/game/campaign.gd").load_all())
+	print("BOSSTEST DONE")
 	get_tree().quit()

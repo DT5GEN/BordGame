@@ -552,3 +552,73 @@ static func bridge_tile() -> Node3D:
 		for zz in [-0.4, 0.4]:
 			add(root, box(Vector3(0.07, 0.6, 0.07)), wood.darkened(0.3), Vector3(0.45 * side, -0.1, zz))
 	return root
+
+# ---------------------------------------------------------------- ДРАКОН
+## Огненный дракон: стоит на 3×3 клетках. Узлы: Body, Neck, Head, Jaw, WingL, WingR, Tail, Eyes, Glow.
+static func dragon() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Dragon"
+	var red := Color("8e1f1f")
+	var dark := Color("5e1414")
+	var belly := Color("d9a35a")
+	var horn := Color("efe3c4")
+	var body := Node3D.new()
+	body.name = "Body"
+	root.add_child(body)
+	add(body, sphere(0.9, 14), red, Vector3(0, 1.1, 0), Vector3(1.0, 0.85, 1.35))
+	add(body, sphere(0.7, 12), belly, Vector3(0, 0.85, 0.3), Vector3(0.85, 0.6, 1.1))
+	# шипы вдоль спины
+	for i in 6:
+		add(body, cyl(0.0, 0.13, 0.34, 4), horn, Vector3(0, 1.85 - i * 0.04, -0.7 + i * 0.28), Vector3.ONE, Vector3(0.25, 0, 0))
+	# лапы
+	for sx in [-1, 1]:
+		for sz in [-0.55, 0.65]:
+			add(body, cyl(0.17, 0.2, 0.7, 7), dark, Vector3(0.62 * sx, 0.38, sz))
+			add(body, box(Vector3(0.32, 0.12, 0.42)), dark, Vector3(0.62 * sx, 0.06, sz + 0.1))
+	# шея и голова
+	var neck := Node3D.new()
+	neck.name = "Neck"
+	neck.position = Vector3(0, 1.45, 1.05)
+	body.add_child(neck)
+	add(neck, cyl(0.3, 0.42, 1.1, 8), red, Vector3(0, 0.35, 0.3), Vector3.ONE, Vector3(0.7, 0, 0))
+	var head := Node3D.new()
+	head.name = "Head"
+	head.position = Vector3(0, 0.95, 0.75)
+	neck.add_child(head)
+	add(head, box(Vector3(0.62, 0.42, 0.78)), red, Vector3(0, 0, 0.18))
+	add(head, box(Vector3(0.5, 0.2, 0.5)), dark, Vector3(0, -0.2, 0.3))
+	var jaw := add(head, box(Vector3(0.48, 0.12, 0.62)), dark.darkened(0.15), Vector3(0, -0.3, 0.25))
+	jaw.name = "Jaw"
+	for sx in [-1, 1]:
+		add(head, cyl(0.0, 0.09, 0.55, 5), horn, Vector3(0.24 * sx, 0.33, -0.12), Vector3.ONE, Vector3(-0.6, 0, -0.25 * sx))
+		add(head, cyl(0.0, 0.04, 0.16, 4), horn, Vector3(0.15 * sx, -0.2, 0.55), Vector3.ONE, Vector3(3.14, 0, 0))
+	var eyes := Node3D.new()
+	eyes.name = "Eyes"
+	head.add_child(eyes)
+	for sx in [-1, 1]:
+		add(eyes, sphere(0.07, 8), Color("ffd23a"), Vector3(0.23 * sx, 0.1, 0.45), Vector3.ONE, Vector3.ZERO, 4.0)
+	# крылья
+	for sx in [-1, 1]:
+		var wing := Node3D.new()
+		wing.name = "WingL" if sx < 0 else "WingR"
+		wing.position = Vector3(0.55 * sx, 1.6, 0.1)
+		body.add_child(wing)
+		add(wing, cyl(0.07, 0.1, 1.9, 5), dark, Vector3(1.0 * sx, 0.2, 0), Vector3.ONE, Vector3(0, 0, 1.2 * sx))
+		add(wing, box(Vector3(1.8, 0.04, 1.3)), Color("a02a2a"), Vector3(1.0 * sx, 0.12, -0.3), Vector3.ONE, Vector3(0, 0, 0.18 * sx))
+	# хвост
+	var tail := Node3D.new()
+	tail.name = "Tail"
+	tail.position = Vector3(0, 0.9, -1.2)
+	body.add_child(tail)
+	for i in 5:
+		var r := 0.4 - i * 0.065
+		add(tail, sphere(r, 8), red.darkened(i * 0.04), Vector3(sin(i * 0.5) * 0.2, 0.0 - i * 0.04, -i * 0.42))
+	add(tail, cyl(0.0, 0.14, 0.4, 4), horn, Vector3(0.1, -0.2, -2.2), Vector3.ONE, Vector3(-1.57, 0, 0))
+	var glow := OmniLight3D.new()
+	glow.name = "Glow"
+	glow.light_color = Color("ff7a2a")
+	glow.omni_range = 7.0
+	glow.light_energy = 1.4
+	glow.position = Vector3(0, 1.6, 0.4)
+	root.add_child(glow)
+	return root

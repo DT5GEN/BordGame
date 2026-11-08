@@ -23,6 +23,8 @@ var _taken := {}
 var season := 0          # 0 лето, 1 осень, 2 зима (в кампании)
 var hard := 1.0          # во сколько раз больше зверей
 var wolf_share := 0.55   # доля волков среди лесных зверей
+var arena := false       # арена боя с драконом вместо долины
+var boss_pos := Vector2i()  # центр дракона (он занимает 3×3 клетки)
 
 func inb(p: Vector2i) -> bool:
 	return p.x >= 0 and p.y >= 0 and p.x < w and p.y < h
@@ -66,6 +68,9 @@ func world_pos(p: Vector2i) -> Vector3:
 	return Vector3(p.x, height(p), p.y)
 
 func generate(width: int, height_: int, seed_: int, n_players: int) -> void:
+	if arena:
+		_gen_arena(width, height_, seed_, n_players)
+		return
 	w = width
 	h = height_
 	rng.seed = seed_
@@ -380,3 +385,43 @@ func _shuffle(a: Array) -> void:
 		var tmp = a[i]
 		a[i] = a[j]
 		a[j] = tmp
+
+
+## Пещера дракона: ровный пол, стены по краю и несколько каменных колонн-укрытий.
+func _gen_arena(width: int, height_: int, seed_: int, np: int) -> void:
+	w = width
+	h = height_
+	rng.seed = seed_
+	t.resize(w * h)
+	top.resize(w * h)
+	rivers = []
+	bridges = []
+	for z in h:
+		for x in w:
+			var edge := x == 0 or z == 0 or x == w - 1 or z == h - 1
+			t[z * w + x] = ROCK if edge else PATH
+			top[z * w + x] = (1.2 + rng.randf() * 0.7) if edge else -0.02
+	boss_pos = Vector2i(w / 2, h / 3)
+	shrine = Vector2i(w / 2, 0)
+	gorge = Vector2i(h - 3, h - 2)
+	# колонны: не рядом с драконом, не у старта и не у костра
+	for i in int(w * h / 38.0):
+		var p := Vector2i(rng.randi_range(2, w - 3), rng.randi_range(4, h - 3))
+		if absi(p.x - boss_pos.x) <= 3 and absi(p.y - boss_pos.y) <= 3:
+			continue
+		if p.y >= h - 5:
+			continue
+		set_t(p, ROCK)
+		top[p.y * w + p.x] = 0.9 + rng.randf() * 0.6
+	for i in np:
+		var sp := Vector2i(int(round((i + 1.0) * w / (np + 1.0))), h - 2)
+		starts.append(sp)
+		set_t(sp, PATH)
+		top[sp.y * w + sp.x] = -0.02
+	var cp := Vector2i(w / 2 - 1, h - 4)
+	for d in CAMP_TILES:
+		set_t(cp + d, PATH)
+		top[(cp + d).y * w + (cp + d).x] = -0.02
+	campfires.append(cp)
+	objects.append({"type": "campfire", "pos": cp})
+	objects.append({"type": "boss", "pos": boss_pos})

@@ -31,6 +31,8 @@ var name_lbl: Label
 var hp_bar: ProgressBar
 var hp_lbl: Label
 var shard_lbl: Label
+var boss_bar: ProgressBar
+var boss_lbl: Label
 var info_lbl: Label
 var status_lbl: Label
 var dot: Panel
@@ -287,6 +289,25 @@ func set_phase(ph: String) -> void:
 	_close_popup()
 	refresh()
 
+func _update_boss_bar() -> void:
+	if boss_bar == null:
+		boss_bar = ProgressBar.new()
+		boss_bar.show_percentage = false
+		boss_bar.custom_minimum_size = Vector2(520, 26)
+		boss_bar.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		boss_bar.position = Vector2(-260, 14)
+		boss_bar.add_theme_stylebox_override("fill", Style.sb(Color("e0481c"), Color("ffcf8a"), 2, 8, 0))
+		boss_bar.add_theme_stylebox_override("background", Style.sb(Color(0.1, 0.05, 0.05, 0.85), Color("5a1a10"), 2, 8, 0))
+		root.add_child(boss_bar)
+		boss_lbl = Style.outlined(Style.label("", 18, Color("fff0d0"), Style.font_bold), 6)
+		boss_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+		boss_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		boss_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		boss_bar.add_child(boss_lbl)
+	boss_bar.max_value = game.boss_max
+	boss_bar.value = game.boss_hp
+	boss_lbl.text = "Огненный дракон  %d / %d" % [game.boss_hp, game.boss_max]
+
 func refresh() -> void:
 	if game == null or game.players.is_empty():
 		return
@@ -312,6 +333,10 @@ func refresh() -> void:
 	if p.bear:
 		extra += " • Медведь"
 	info_lbl.text = "Ловушки %d • Сумка %d • До горы %d%s" % [p.hand.size(), p.items.size(), rows, extra]
+	if game.boss:
+		info_lbl.text = "Ловушки %d • Сумка %d • Твой урон %d • Круг %d из %d%s" % [p.hand.size(), p.items.size(), int(game.boss_dmg[p.idx]), mini(game.round_no, Camp.BOSS_ROUNDS), Camp.BOSS_ROUNDS, extra]
+		shard_lbl.text = ""
+		_update_boss_bar()
 	var st: Array = []
 	if p.now_skip_move:
 		st.append("застрял")
@@ -1235,7 +1260,7 @@ func show_round_result(d: Dictionary) -> void:
 	cc.add_child(page2)
 
 	# --- страница 1: итоги
-	var sub := Style.outlined(Style.label("Раунд %d из 3  •  %s" % [int(d["chapter"]) + 1, game.season_d["name"]], 26, Style.PARCH), 8)
+	var sub := Style.outlined(Style.label(("Финал  •  Пещера дракона" if int(d["chapter"]) >= Camp.BOSS else "Раунд %d из 3  •  %s" % [int(d["chapter"]) + 1, game.season_d["name"]]), 26, Style.PARCH), 8)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	page1.add_child(sub)
 	var wl := Style.outlined(Style.label(str(d["winner"]), 44, (d["wcol"] as Color).lightened(0.3), Style.font_title), 12)
@@ -1252,11 +1277,11 @@ func show_round_result(d: Dictionary) -> void:
 	gr.add_theme_constant_override("h_separation", 40)
 	gr.add_theme_constant_override("v_separation", 4)
 	pc.add_child(gr)
-	for hd in ["Игрок", "За раунд", "Всего очков"]:
+	for hd in ["Игрок", "За раунд" + (" (урон)" if int(d["chapter"]) >= Camp.BOSS else ""), "Всего очков"]:
 		gr.add_child(Style.label(hd, 20, Style.PARCH.darkened(0.25), Style.font_bold))
 	for r in d["rows"]:
 		gr.add_child(Style.label(("★ " if r["win"] else "") + str(r["name"]), 26, (r["color"] as Color).lightened(0.3), Style.font_bold))
-		gr.add_child(Style.label("+%d" % int(r["pts"]), 26, Style.GOLD if r["win"] else Style.PARCH, Style.font_bold))
+		gr.add_child(Style.label(("%d урона → " % int(r["dmg"]) if r.has("dmg") else "") + "+%d" % int(r["pts"]), 26, Style.GOLD if r["win"] else Style.PARCH, Style.font_bold))
 		gr.add_child(Style.label("%d" % int(r["total"]), 26, Style.PARCH, Style.font_bold))
 	if d["team_mode"]:
 		var tot := [0, 0]
@@ -1266,6 +1291,12 @@ func show_round_result(d: Dictionary) -> void:
 		var tl := Style.label("Команды: «%s» — %d,  «%s» — %d" % [game.team_name(0), tot[0], game.team_name(1), tot[1]], 22, Style.PARCH)
 		tl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		page1.add_child(tl)
+	if d.has("champion"):
+		var chl := Style.outlined(Style.label(str(d["champion"]), 34, Style.GOLD, Style.font_title), 10)
+		chl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		chl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		chl.custom_minimum_size.x = 860
+		page1.add_child(chl)
 	for e in d["ach"]:
 		var info: Array = Camp.ACH[e["id"]]
 		var al := Style.outlined(Style.label("Ачивка «%s» — %s" % [info[0], e["who"]], 24, Color("7fe3ff"), Style.font_bold), 8)
