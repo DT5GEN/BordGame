@@ -88,6 +88,10 @@ func _ready() -> void:
 		await _wait(0.5)
 		await _shot("hero_roll")
 		get_tree().quit()
+	elif "--gfxmovie" in OS.get_cmdline_user_args():
+		_gfxmovie.call_deferred()
+	elif "--gfxtest" in OS.get_cmdline_user_args():
+		_gfxtest.call_deferred()
 	elif "--menutest" in OS.get_cmdline_user_args():
 		show_menu()
 		await _wait(1.0)
@@ -916,6 +920,24 @@ func _bosstest() -> void:
 	g.follow = null
 	await _wait(1.5)
 	await _shot("b_arena")
+	g.hud.root.visible = false
+	g.cam_dist = 6.5
+	g.cam_pitch = deg_to_rad(22.0)
+	g.cam_target = g.boss_node.position + Vector3(0, 1.2, 0)
+	g.cam_goal = g.cam_target
+	var yaw0: float = g.cam_yaw
+	g.cam_yaw = yaw0 + PI * 0.85
+	await _wait(1.0)
+	await _shot("b_dragon")
+	g.cam_yaw = yaw0
+	if OS.has_environment("BOSS_LOOK"):
+		get_tree().quit()
+		return
+	g.hud.root.visible = true
+	g.cam_dist = 17.0
+	g.cam_pitch = deg_to_rad(48.0)
+	g.cam_target = g.map.world_pos(Vector2i(8, 11))
+	g.cam_goal = g.cam_target
 	var bp: Vector2i = g.map.boss_pos
 	for k in 3:
 		g.rng.seed = 100 + k
@@ -953,4 +975,172 @@ func _bosstest() -> void:
 		await _shot("b_result2")
 	print("BOSS scores=", g._camp_scores, " ach=", load("res://scripts/game/campaign.gd").load_all())
 	print("BOSSTEST DONE")
+	get_tree().quit()
+
+
+## Скриншоты для оценки картинки: общий план, герой крупно, шаг, звери, HUD.
+func _gfxtest() -> void:
+	var list: Array = []
+	for i in 3:
+		list.append({"name": ["Тимур", "Мира", "Данияр"][i], "hero": [0, 3, 1][i], "pet": i == 0, "slot": i, "team": 0, "ability": i})
+	var cfg: Dictionary = {"players": list, "size": Vector2i(24, 50), "show_rules": false, "seed": 777, "team_mode": false}
+	if OS.has_environment("GFX_HQ"):
+		Settings.eco = false
+		Settings.apply_video()
+	if OS.has_environment("GFX_CH"):
+		cfg["camp"] = {"chapter": int(OS.get_environment("GFX_CH")), "scores": [], "wins": []}
+	start_game(cfg)
+	await _wait(1.5)
+	var g = current
+	if g.camp:
+		g.hud._story_closed.emit()
+		await _wait(0.8)
+	await _shot("g_hud")
+	g.hud.overlay_pass.visible = false
+	g.follow = null
+	var p0: Dictionary = g.players[0]
+	g.cam_dist = 13.0
+	g.cam_pitch = deg_to_rad(42.0)
+	g.cam_target = p0.node.position + Vector3(0, 0, 4)
+	g.cam_goal = g.cam_target
+	await _wait(1.2)
+	await _shot("g_wide")
+	g.hud.root.visible = false
+	g.cam_dist = 2.6
+	g.cam_pitch = deg_to_rad(14.0)
+	g.cam_yaw = PI
+	g.cam_target = p0.node.position + Vector3(0, 0.45, 0)
+	g.cam_goal = g.cam_target
+	for q in g.players:
+		q.node.rotation.y = 0.0
+	await _wait(1.0)
+	await _shot("g_hero")
+	p0.node.set("walking", true)
+	await _wait(0.33)
+	await _shot("g_walk")
+	p0.node.set("walking", false)
+	if p0.node.has_method("emote"):
+		for em in ["happy", "hurt", "angry", "cheer"]:
+			p0.node.emote(em)
+			await _wait(0.45)
+			await _shot("g_emo_" + em)
+			await _wait(0.8)
+	# парад: все герои, звери и питомцы в ряд
+	var ModelsG = load("res://scripts/world/models.gd")
+	var base: Vector3 = p0.node.position
+	var extra: Array = []
+	for q in g.players:
+		q.node.visible = false
+		if q.get("pet_node") != null:
+			q.pet_node.visible = false
+	for i in DB.heroes.size():
+		var hn: Node3D = ModelsG.hero(DB.heroes[i])
+		hn.position = base + Vector3((i - (DB.heroes.size() - 1) * 0.5) * 0.62, 0, 0)
+		g.entities.add_child(hn)
+		extra.append(hn)
+	g.cam_dist = 4.4
+	g.cam_target = base + Vector3(0, 0.5, 0)
+	g.cam_goal = g.cam_target
+	await _wait(0.8)
+	await _shot("g_line")
+	for i in extra.size():
+		extra[i].emote(["happy", "hurt", "angry", "sad", "wow", "cheer"][i % 6], 5.0)
+	await _wait(0.3)
+	await _shot("g_line_emo")
+	for n in extra:
+		n.queue_free()
+	extra.clear()
+	var kinds: Array = DB.beasts.keys()
+	for i in kinds.size():
+		var bn: Node3D = ModelsG.beast(kinds[i])
+		bn.position = base + Vector3((i - (kinds.size() - 1) * 0.5) * 1.1, 0, 0)
+		g.entities.add_child(bn)
+		extra.append(bn)
+	await _wait(0.6)
+	await _shot("g_beasts")
+	for n in extra:
+		n.queue_free()
+	extra.clear()
+	var pets := ["dog", "cat", "parrot", "hamster", "pig", "cow", "chicken", "fox"]
+	for i in pets.size():
+		var pn: Node3D = ModelsG.summon_model(pets[i])
+		pn.position = base + Vector3((i - (pets.size() - 1) * 0.5) * 0.6, 0, 0)
+		g.entities.add_child(pn)
+		extra.append(pn)
+	var misc: Array = [ModelsG.chest(), ModelsG.shard(), ModelsG.campfire(), ModelsG.event_stone(), ModelsG.elf(Color("3fae6a")), ModelsG.glowing_chest(), ModelsG.trap_marker()]
+	for i in misc.size():
+		misc[i].position = base + Vector3((i - (misc.size() - 1) * 0.5) * 0.7, 0, 1.0)
+		g.entities.add_child(misc[i])
+		extra.append(misc[i])
+	g.cam_pitch = deg_to_rad(24.0)
+	await _wait(0.6)
+	await _shot("g_pets")
+	for n in extra:
+		n.queue_free()
+	for q in g.players:
+		q.node.visible = true
+	g.cam_pitch = deg_to_rad(14.0)
+	# ближайший зверь
+	var best = null
+	for k in g.objects:
+		var o: Dictionary = g.objects[k]
+		if o["type"] == "beast" and (best == null or (o["node"].position - p0.node.position).length() < (best["node"].position - p0.node.position).length()):
+			best = o
+	if best != null:
+		best["node"].visible = true
+		best["node"].rotation.y = 0.0
+		g.cam_target = best["node"].position + Vector3(0, 0.35, 0)
+		g.cam_goal = g.cam_target
+		g.cam_dist = 3.0
+		await _wait(0.8)
+		await _shot("g_beast")
+	g.cam_dist = 7.0
+	g.cam_pitch = deg_to_rad(30.0)
+	g.cam_yaw = PI * 0.8
+	g.cam_target = p0.node.position + Vector3(1.5, 0, 3)
+	g.cam_goal = g.cam_target
+	await _wait(1.0)
+	await _shot("g_mid")
+	print("GFXTEST DONE")
+	get_tree().quit()
+
+
+## Ролик для показа анимаций: запускать с --write-movie файл.avi --fixed-fps 30 -- --gfxmovie
+func _gfxmovie() -> void:
+	Settings.eco = false
+	Settings.apply_video()
+	var list: Array = []
+	for i in 3:
+		list.append({"name": ["Тимур", "Мира", "Данияр"][i], "hero": [0, 2, 3][i], "pet": i == 0, "slot": i, "team": 0, "ability": i})
+	start_game({"players": list, "size": Vector2i(24, 50), "show_rules": false, "seed": 777, "team_mode": false})
+	await _wait(1.2)
+	var g = current
+	g.hud.overlay_pass.visible = false
+	g.hud.root.visible = false
+	g.follow = null
+	var p0: Dictionary = g.players[0]
+	var n: Node3D = p0.node
+	for q in g.players:
+		q.node.rotation.y = 0.0
+	g.cam_dist = 3.2
+	g.cam_pitch = deg_to_rad(16.0)
+	g.cam_yaw = PI
+	g.cam_target = n.position + Vector3(0, 0.5, 0)
+	g.cam_goal = g.cam_target
+	await _wait(1.6)
+	# шаг вперёд на две клетки и назад
+	for leg in 2:
+		n.rotation.y = 0.0 if leg == 0 else PI
+		n.set("walking", true)
+		var tw := create_tween()
+		tw.tween_property(n, "position:z", n.position.z + (1.6 if leg == 0 else -1.6), 1.5)
+		await tw.finished
+		n.set("walking", false)
+		await _wait(0.5)
+	n.rotation.y = 0.0
+	await _wait(0.6)
+	for em in ["happy", "wow", "hurt", "angry", "sad", "cheer"]:
+		n.emote(em, 1.3)
+		await _wait(1.5)
+	await _wait(0.8)
 	get_tree().quit()

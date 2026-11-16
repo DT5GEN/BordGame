@@ -105,6 +105,7 @@ var _camp_scores: Array = []
 var _camp_wins: Array = []
 var _camp_win_ids: Array = []
 var _snow := false
+var motes: CPUParticles3D
 # --- босс (глава Camp.BOSS)
 var boss := false
 var boss_hp := 0
@@ -268,23 +269,28 @@ func _setup_env() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = 0.6
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 0.95
+	env.tonemap_exposure = 1.0
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 1.12
+	env.adjustment_contrast = 1.04
 	env.ambient_light_sky_contribution = 0.7
 	env.fog_enabled = true
 	env.fog_density = 0.004
 	env.fog_light_energy = 0.6
 	env.fog_sky_affect = 0.3
 	env.glow_enabled = true
-	env.glow_intensity = 0.3
-	env.glow_bloom = 0.0
-	env.glow_hdr_threshold = 1.3
+	env.glow_intensity = 0.45
+	env.glow_bloom = 0.04
+	env.glow_hdr_threshold = 1.15
 	we.environment = env
 	add_child(we)
 	sun = DirectionalLight3D.new()
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	sun.directional_shadow_max_distance = 26.0
+	sun.directional_shadow_max_distance = 30.0
+	sun.directional_shadow_blend_splits = true
 	sun.shadow_bias = 0.04
+	sun.shadow_blur = 1.4
 	add_child(sun)
 
 func _spawn_objects() -> void:
@@ -548,6 +554,52 @@ func _setup_darkness_and_rain() -> void:
 		snm.albedo_color = Color(1, 1, 1, 0.9)
 		sm.material = snm
 		rain.mesh = sm
+	_setup_motes()
+
+## Живой воздух: пыльца летом, листья осенью, искорки инея зимой, угольки в пещере.
+func _setup_motes() -> void:
+	motes = CPUParticles3D.new()
+	var ch := clampi(chapter if camp else 0, 0, 3)
+	var cfgs := [
+		{"n": 46, "life": 7.0, "col": Color(1.0, 0.97, 0.7, 0.75), "size": Vector3(0.035, 0.035, 0.035), "g": Vector3(0.15, 0.05, 0.0), "v": [0.1, 0.35], "glow": 1.4},
+		{"n": 34, "life": 6.0, "col": Color(0.95, 0.5, 0.12, 0.95), "size": Vector3(0.11, 0.012, 0.08), "g": Vector3(0.5, -0.55, 0.1), "v": [0.2, 0.6], "glow": 0.0},
+		{"n": 40, "life": 6.0, "col": Color(0.9, 0.97, 1.0, 0.85), "size": Vector3(0.03, 0.03, 0.03), "g": Vector3(0.2, -0.12, 0.0), "v": [0.1, 0.3], "glow": 1.8},
+		{"n": 50, "life": 4.5, "col": Color(1.0, 0.55, 0.15, 0.95), "size": Vector3(0.04, 0.04, 0.04), "g": Vector3(0.0, 0.7, 0.0), "v": [0.2, 0.6], "glow": 3.0},
+	]
+	var c: Dictionary = cfgs[ch]
+	motes.amount = int(c["n"])
+	motes.lifetime = float(c["life"])
+	motes.preprocess = float(c["life"])
+	motes.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	motes.emission_box_extents = Vector3(9, 1.6, 9)
+	motes.direction = Vector3(1, 0.2, 0.3)
+	motes.spread = 180.0
+	motes.initial_velocity_min = c["v"][0]
+	motes.initial_velocity_max = c["v"][1]
+	motes.gravity = c["g"]
+	motes.angular_velocity_min = -120.0
+	motes.angular_velocity_max = 120.0
+	motes.scale_amount_min = 0.6
+	motes.scale_amount_max = 1.4
+	var curve := Curve.new()
+	curve.add_point(Vector2(0.0, 0.0))
+	curve.add_point(Vector2(0.15, 1.0))
+	curve.add_point(Vector2(0.8, 1.0))
+	curve.add_point(Vector2(1.0, 0.0))
+	motes.scale_amount_curve = curve
+	var mm := Models.box(c["size"])
+	var mt := StandardMaterial3D.new()
+	mt.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mt.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mt.albedo_color = c["col"]
+	if float(c["glow"]) > 0.0:
+		mt.emission_enabled = true
+		mt.emission = c["col"]
+		mt.emission_energy_multiplier = float(c["glow"])
+	mm.material = mt
+	motes.mesh = mm
+	motes.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(motes)
 
 func _setup_camera() -> void:
 	cam = Camera3D.new()
@@ -583,10 +635,14 @@ func _process(delta: float) -> void:
 		cam.fov = lerpf(cam.fov, 50.0, minf(delta * 6.0, 1.0))
 	if rain.emitting:
 		rain.position = cam_target + Vector3(0, 9, 3)
+	if motes != null:
+		motes.position = cam_target + Vector3(0, 1.4, 0)
 	if info.get("foliage_mat"):
 		var fm: ShaderMaterial = info["foliage_mat"]
 		var w: float = fm.get_shader_parameter("wind") if fm.get_shader_parameter("wind") != null else 0.3
 		fm.set_shader_parameter("wind", lerpf(w, wind, minf(delta, 1.0)))
+		if fm.next_pass != null:
+			(fm.next_pass as ShaderMaterial).set_shader_parameter("wind", fm.get_shader_parameter("wind"))
 
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventScreenTouch:
@@ -807,6 +863,7 @@ func _on_emote(cid: int, e: int) -> void:
 		return
 	var q: Dictionary = players[int(_seat_of[cid])]
 	_float_text(q.node, EMOTES[e], q.color.lightened(0.3))
+	_mood(q.node, ["happy", "angry", "neutral", "cheer", "sad", "happy", "wow", "sad"][e], 2.2)
 	if hud:
 		hud.toast("%s: %s" % [q.name, EMOTES[e]], q.color.lightened(0.35), 2.5)
 
@@ -1680,11 +1737,13 @@ func _use_object(p: Dictionary, tile: Vector2i, o: Dictionary) -> bool:
 			"shard":
 				Settings.play("shard")
 				p.shards += 1
+				_mood(p.node, "cheer", 2.0)
 				_remove_object(tile)
 				_float_text(p.node, "+1 осколок", Style.TEAL)
 				hud.toast("Ты нашёл осколок! Теперь у тебя %d из 3." % p.shards, Style.TEAL, 3.0)
 				_update_shrine_sockets()
 			"chest":
+				_mood(p.node, "wow", 1.8)
 				Settings.play("chest")
 				var lid: Node3D = o["node"].get_node("Lid")
 				var tw := create_tween()
@@ -1692,6 +1751,7 @@ func _use_object(p: Dictionary, tile: Vector2i, o: Dictionary) -> bool:
 				objects.erase(tile)
 				if o["content"] == "shard":
 					p.shards += 1
+					_mood(p.node, "cheer", 2.0)
 					Settings.play("shard")
 					_float_text(p.node, "+1 осколок", Style.TEAL)
 					hud.toast("В сундуке сиял осколок! У тебя %d из 3." % p.shards, Style.TEAL, 3.0)
@@ -2000,6 +2060,7 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 		var dmg0 := int(def["dmg"]) + (1 if p.now_vuln or p.vuln > 0 else 0)
 		txt = "Поражение... %d против силы %d. −%d HP" % [int(res["total"]), power, dmg0]
 	await hud.battle_finish(txt, win)
+	_mood(_fight_a, "cheer" if win else "sad", 2.0)
 	_end_fight()
 	if win:
 		o["hits"] -= int(round(float(p.dmg_mult))) + int(p.wolves)
@@ -2013,6 +2074,7 @@ func _fight_beast(p: Dictionary, tile: Vector2i, o: Dictionary) -> void:
 		_remove_object(tile)
 		if o.get("shard", false):
 			p.shards += 1
+			_mood(p.node, "cheer", 2.0)
 			Settings.play("shard")
 			_float_text(p.node, "+1 осколок", Style.TEAL)
 			hud.toast("%s повержен и оставил осколок! У тебя %d из 3." % [def["name"], p.shards], Style.TEAL, 3.0)
@@ -2042,6 +2104,7 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 	elif d > a:
 		res = "%s отбивается: %d против %d. −2 HP" % [q.name, d, a]
 	await hud.battle_finish(res, a > d)
+	_mood(_fight_a, "cheer" if a > d else "sad", 2.0)
 	_end_fight()
 	if a > d and _has_unit(cur, "bear"):
 		p.items.append("honey")
@@ -2052,6 +2115,7 @@ func _duel(p: Dictionary, q: Dictionary) -> void:
 		if q.shards > 0:
 			q.shards -= 1
 			p.shards += 1
+			_mood(p.node, "cheer", 2.0)
 			hud.toast("%s отбирает осколок у %s!" % [p.name, q.name], Style.TEAL, 3.0)
 			q.reports.append("%s напал(а) и отобрал(а) у тебя осколок (−%d HP)." % [p.name, dmg])
 			_update_shrine_sockets()
@@ -2105,6 +2169,7 @@ func _fight_boss(p: Dictionary, o: Dictionary) -> void:
 		dmg = maxi(1, int(round(float(p.dmg_mult)))) + int(p.wolves) + (1 if total >= BOSS_POWER + 3 else 0)
 		dmg = mini(dmg, boss_hp)
 	await hud.battle_finish(("Попал! Дракон теряет %d." % dmg) if win else "Мимо... %d против %d. Дракон огрызается." % [total, BOSS_POWER], win)
+	_mood(_fight_a, "cheer" if win else "sad", 2.0)
 	_end_fight()
 	if win:
 		boss_hp -= dmg
@@ -2415,6 +2480,7 @@ func _on_battle_event(kind: String) -> void:
 			tw.tween_property(b, "position", home.lerp(a.position, 0.35), 1.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 			tw.tween_property(b, "position", home, 0.35)
 		"block":
+			_mood(a, "angry", 1.0)
 			Settings.play("block")
 			var arm: Node3D = a.get_node_or_null("Body/ArmL")
 			if arm:
@@ -2424,6 +2490,7 @@ func _on_battle_event(kind: String) -> void:
 				tw2.tween_property(arm, "rotation", Vector3.ZERO, 0.2)
 			_float_text(a, "Блок!", Style.GREEN)
 		"hit":
+			_mood(a, "hurt", 1.0)
 			Settings.play("hit")
 			var home2 := a.position
 			var back := home2 + (home2 - b.position).normalized() * 0.15
@@ -2432,6 +2499,7 @@ func _on_battle_event(kind: String) -> void:
 			tw3.tween_property(a, "position", home2, 0.2)
 			_float_text(a, "Ай!", Style.RED)
 		"hero_attack":
+			_mood(a, "angry", 0.9)
 			Settings.play("hit", 0.15)
 			var arm2: Node3D = a.get_node_or_null("Body/ArmR")
 			var home3 := a.position
@@ -2443,8 +2511,14 @@ func _on_battle_event(kind: String) -> void:
 			if arm2:
 				tw4.parallel().tween_property(arm2, "rotation", Vector3.ZERO, 0.25)
 
+## Эмоция на лице героя (только картинка, на ход игры не влияет).
+func _mood(node, kind: String, secs: float = 1.6) -> void:
+	if node != null and is_instance_valid(node) and node.has_method("emote"):
+		node.emote(kind, secs)
+
 func _damage(p: Dictionary, n: int) -> void:
 	p.hp = maxi(0, p.hp - n)
+	_mood(p.node, "hurt", 1.2)
 	_float_text(p.node, "−%d" % n, Style.RED)
 	if hud:
 		hud.refresh()
@@ -2468,6 +2542,7 @@ func _float_text(node: Node3D, txt: String, col: Color) -> void:
 
 func _respawn(p: Dictionary) -> void:
 	_stop_walk(p)
+	_mood(p.node, "sad", 3.0)
 	await hud.alert("%s без сил..." % p.name, "Герой очнётся у последнего костра. Потерян один осколок и одна карта.", Style.RED)
 	if p.shards > 0:
 		p.shards -= 1
@@ -2770,6 +2845,7 @@ func _fight_unit(p: Dictionary, u: Dictionary) -> void:
 	else:
 		txt = "Промах... %s кусает в ответ: −%d HP" % [u["name"], maxi(1, u["dmg"])]
 	await hud.battle_finish(txt, win)
+	_mood(_fight_a, "cheer" if win else "sad", 2.0)
 	_end_fight()
 	if win:
 		u["hp"] -= dmg
@@ -2949,6 +3025,8 @@ func _bear_guard(p: Dictionary) -> bool:
 
 # ================================================================= ФИНАЛ
 func _victory(p: Dictionary) -> void:
+	for q0 in players:
+		_mood(q0.node, "cheer" if _win_ids(p).has(q0.idx) else "sad", 4.0)
 	game_over = true
 	_clear_highlight()
 	DB.last_winner_slot = p.slot

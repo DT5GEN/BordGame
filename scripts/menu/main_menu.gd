@@ -186,7 +186,7 @@ void fragment() {
 	panel.add_child(v)
 	var t := Style.outlined(Style.label("Осколки Долины", 56, Style.GOLD, Style.font_title), 8)
 	v.add_child(t)
-	v.add_child(Style.label("Пошаговое приключение • версия 0.7", 18, Color(Style.PARCH, 0.7)))
+	v.add_child(Style.label("Пошаговое приключение • версия 0.8", 18, Color(Style.PARCH, 0.7)))
 	var ch := HBoxContainer.new()
 	v.add_child(ch)
 	ch.add_child(Style.label("Игроков:", 24, Style.PARCH, Style.font_bold))

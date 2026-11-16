@@ -48,10 +48,8 @@ static func build(map, parent: Node3D) -> Dictionary:
 			groups[key].append([p, tile_color(tt, x, z, rng, map.season), topy])
 	var boxm := BoxMesh.new()
 	boxm.size = Vector3.ONE
-	var tile_mat := StandardMaterial3D.new()
-	tile_mat.vertex_color_use_as_albedo = true
-	tile_mat.vertex_color_is_srgb = true
-	tile_mat.roughness = 0.95
+	var tile_mat := ShaderMaterial.new()
+	tile_mat.shader = load("res://shaders/tile.gdshader")
 	for key in groups:
 		var arr: Array = groups[key]
 		var mm := MultiMesh.new()
@@ -96,7 +94,25 @@ static func build(map, parent: Node3D) -> Dictionary:
 	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(water)
 	info["water_mat"] = wm
+	if not map.arena:
+		var cl := Node3D.new()
+		cl.set_script(load("res://scripts/world/clouds.gd"))
+		cl.set("map_w", float(map.w))
+		cl.set("map_h", float(map.h))
+		parent.add_child(cl)
 	return info
+
+## Материал листвы/камней: мультяшный свет, обводка; wind = 0 — не качается.
+static func _foliage_mat(wind: float, outline: bool) -> ShaderMaterial:
+	var fm := ShaderMaterial.new()
+	fm.shader = load("res://shaders/foliage.gdshader")
+	fm.set_shader_parameter("wind", wind)
+	if outline:
+		var o := ShaderMaterial.new()
+		o.shader = load("res://shaders/foliage_outline.gdshader")
+		o.set_shader_parameter("wind", wind)
+		fm.next_pass = o
+	return fm
 
 static func _mm(mesh: Mesh, items: Array, mat: Material, parent: Node3D, shadows := true, info: Dictionary = {}) -> void:
 	if items.is_empty():
@@ -180,8 +196,9 @@ static func _trees(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 					g = Color(rng.randf_range(0.14, 0.2), rng.randf_range(0.30, 0.38), rng.randf_range(0.24, 0.3))
 					top_c = Color(0.9, 0.95, 0.98)
 				if rng.randf() < (0.8 if sn == 2 else 0.55):
-					pines.append([Transform3D(Basis.from_scale(Vector3(s, s, s)), base + Vector3(0, 0.45 * s, 0)), g, p])
-					pines.append([Transform3D(Basis.from_scale(Vector3(s * 0.75, s * 0.8, s * 0.75)), base + Vector3(0, 0.75 * s, 0)), top_c, p])
+					pines.append([Transform3D(Basis.from_scale(Vector3(s, s * 0.9, s)), base + Vector3(0, 0.42 * s, 0)), g.darkened(0.06), p])
+					pines.append([Transform3D(Basis.from_scale(Vector3(s * 0.78, s * 0.8, s * 0.78)), base + Vector3(0, 0.68 * s, 0)), g.lerp(top_c, 0.5), p])
+					pines.append([Transform3D(Basis.from_scale(Vector3(s * 0.52, s * 0.68, s * 0.52)), base + Vector3(0, 0.92 * s, 0)), top_c, p])
 				else:
 					var g2 := Color(rng.randf_range(0.30, 0.45), rng.randf_range(0.55, 0.70), rng.randf_range(0.20, 0.30))
 					if sn == 1:
@@ -192,19 +209,19 @@ static func _trees(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 						# зимой лиственные в снегу и инее
 						g2 = Color(rng.randf_range(0.80, 0.9), rng.randf_range(0.86, 0.94), rng.randf_range(0.92, 0.98))
 					rounds.append([Transform3D(Basis.from_scale(Vector3(s, s * 0.9, s)), base + Vector3(0, 0.58 * s, 0)), g2, p])
-	var fm := ShaderMaterial.new()
-	fm.shader = load("res://shaders/foliage.gdshader")
+					# пышная крона: ещё два комка поменьше сбоку и сверху
+					var ca := rng.randf() * TAU
+					rounds.append([Transform3D(Basis.from_scale(Vector3(s, s, s) * 0.66), base + Vector3(cos(ca) * 0.17 * s, 0.5 * s, sin(ca) * 0.17 * s)), g2.darkened(0.07), p])
+					rounds.append([Transform3D(Basis.from_scale(Vector3(s, s, s) * 0.6), base + Vector3(-cos(ca) * 0.12 * s, 0.76 * s, -sin(ca) * 0.12 * s)), g2.lightened(0.08), p])
+	var fm := _foliage_mat(0.3, true)
 	info["foliage_mat"] = fm
-	var trunk_mat := StandardMaterial3D.new()
-	trunk_mat.vertex_color_use_as_albedo = true
-	trunk_mat.vertex_color_is_srgb = true
-	_mm(Models.cyl(0.045, 0.065, 0.32, 6), trunks, trunk_mat, parent, true, info)
-	_mm(Models.cyl(0.0, 0.3, 0.55, 7), pines, fm, parent, true, info)
+	_mm(Models.cyl(0.045, 0.07, 0.34, 8), trunks, _foliage_mat(0.0, true), parent, true, info)
+	_mm(Models.cyl(0.0, 0.3, 0.55, 10), pines, fm, parent, true, info)
 	var blob := SphereMesh.new()
 	blob.radius = 0.3
 	blob.height = 0.6
-	blob.radial_segments = 8
-	blob.rings = 5
+	blob.radial_segments = 12
+	blob.rings = 6
 	_mm(blob, rounds, fm, parent, true, info)
 
 static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictionary) -> void:
@@ -241,7 +258,10 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 							g = Color(rng.randf_range(0.7, 0.9), rng.randf_range(0.4, 0.6), rng.randf_range(0.1, 0.2))
 						elif sn == 2:
 							g = Color(rng.randf_range(0.82, 0.95), rng.randf_range(0.88, 0.96), 1.0)
-						tufts.append([Transform3D(Basis().rotated(Vector3.UP, rng.randf() * TAU), Vector3(x, y, z) + off), g, p])
+						for bl in 3:
+							var tilt := Basis().rotated(Vector3.RIGHT, rng.randf_range(-0.35, 0.35)).rotated(Vector3.UP, rng.randf() * TAU)
+							var bs := rng.randf_range(0.7, 1.25)
+							tufts.append([Transform3D(tilt.scaled(Vector3(1, bs, 1)), Vector3(x, y, z) + off + Vector3(rng.randf_range(-0.035, 0.035), 0.03 * bs, rng.randf_range(-0.035, 0.035))), g.lightened(rng.randf_range(-0.05, 0.1)), p])
 			elif tt == M.ROCK:
 				var low: bool = y < 0.5
 				for k in (rng.randi_range(2, 3) if low else rng.randi_range(1, 2)):
@@ -258,15 +278,15 @@ static func _decor(map, parent: Node3D, rng: RandomNumberGenerator, info: Dictio
 	vm.vertex_color_is_srgb = true
 	vm.roughness = 1.0
 	var fl := SphereMesh.new()
-	fl.radius = 0.035
-	fl.height = 0.06
-	fl.radial_segments = 6
-	fl.rings = 3
+	fl.radius = 0.042
+	fl.height = 0.07
+	fl.radial_segments = 8
+	fl.rings = 4
 	_mm(fl, flowers, vm, parent, false, info)
-	_mm(Models.cyl(0.0, 0.035, 0.12, 4), tufts, vm, parent, false, info)
+	_mm(Models.cyl(0.0, 0.022, 0.17, 4), tufts, _foliage_mat(0.5, false), parent, false, info)
 	var bm := SphereMesh.new()
 	bm.radius = 0.3
 	bm.height = 0.6
-	bm.radial_segments = 6
-	bm.rings = 3
-	_mm(bm, boulders, vm, parent, true, info)
+	bm.radial_segments = 7
+	bm.rings = 4
+	_mm(bm, boulders, _foliage_mat(0.0, true), parent, true, info)

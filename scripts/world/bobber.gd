@@ -1,14 +1,18 @@
 extends Node3D
-## Лёгкая «жизнь» для объектов: покачивание, вращение кристалла, мерцание огня.
+## Лёгкая «жизнь» для объектов: дыхание, хвост, поворот головы, вращение кристалла, мерцание огня.
 
 var spin := false
 var flicker := false
 var _t := 0.0
 var _base_scale := Vector3.ONE
+var _tail: Node3D
+var _head: Node3D
 
 func _ready() -> void:
 	_t = randf() * 10.0
 	_base_scale = scale
+	_tail = get_node_or_null("Tail")
+	_head = get_node_or_null("Head")
 
 func _process(delta: float) -> void:
 	_t += delta
@@ -26,4 +30,10 @@ func _process(delta: float) -> void:
 		if l:
 			l.light_energy = l.get_meta("base", 1.6) * (0.9 + sin(_t * 13.0) * 0.07 + sin(_t * 5.1) * 0.05)
 	else:
-		scale = _base_scale * Vector3(1.0, 1.0 + sin(_t * 2.2) * 0.02, 1.0)
+		var b := sin(_t * 2.2) * 0.025
+		scale = _base_scale * Vector3(1.0 - b * 0.5, 1.0 + b, 1.0 - b * 0.5)
+		if _tail:
+			_tail.rotation.y = sin(_t * 5.5) * 0.4
+		if _head:
+			_head.rotation.y = sin(_t * 0.7) * 0.22
+			_head.rotation.x = sin(_t * 1.6) * 0.05

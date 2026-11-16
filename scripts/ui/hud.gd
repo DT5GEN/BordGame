@@ -404,7 +404,9 @@ func toast(text: String, col: Color = Style.PARCH, dur: float = 3.0) -> void:
 	toasts.add_child(pc)
 	while toasts.get_child_count() > 4:
 		toasts.get_child(0).free()
+	pc.modulate.a = 0.0
 	var tw := pc.create_tween()
+	tw.tween_property(pc, "modulate:a", 1.0, 0.18)
 	tw.tween_interval(dur)
 	tw.tween_property(pc, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(pc.queue_free)
@@ -422,8 +424,11 @@ func big_banner(title: String, sub: String) -> void:
 	banner.add_child(s)
 	banner.visible = true
 	banner.modulate.a = 0.0
+	banner.pivot_offset = banner.size * 0.5
+	banner.scale = Vector2(0.7, 0.7)
 	var tw := create_tween()
-	tw.tween_property(banner, "modulate:a", 1.0, 0.5)
+	tw.tween_property(banner, "modulate:a", 1.0, 0.35)
+	tw.parallel().tween_property(banner, "scale", Vector2.ONE, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_interval(2.4)
 	tw.tween_property(banner, "modulate:a", 0.0, 0.8)
 	tw.tween_callback(func(): banner.visible = false)
@@ -477,6 +482,8 @@ func _show_modal(dim: float) -> void:
 	modal.visible = true
 	modal.move_to_front()
 	alert_panel.move_to_front()
+	if not fast:
+		Style.pop_in.call_deferred(alert_panel)
 
 func _hide_modal() -> void:
 	modal.visible = false

@@ -48,16 +48,58 @@ func sb(bg: Color, border: Color = GOLD, bw: int = 2, radius: int = 14, margin: 
 	s.anti_aliasing = true
 	return s
 
+## Кнопка «с объёмом»: светлая кромка сверху и тёмная подставка снизу; нажатая — утоплена.
+func btn_sb(bg: Color, border: Color = GOLD, pressed := false, radius: int = 14, margin: int = 10) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg
+	s.border_color = border
+	s.set_border_width_all(2)
+	s.border_blend = true
+	s.set_corner_radius_all(radius)
+	s.set_content_margin_all(margin)
+	s.anti_aliasing = true
+	s.shadow_color = Color(0.1, 0.05, 0.02, 0.85)
+	s.shadow_size = 1
+	if pressed:
+		s.shadow_offset = Vector2(0, 1)
+		s.content_margin_top = margin + 3
+		s.content_margin_bottom = margin - 3
+	else:
+		s.shadow_offset = Vector2(0, 4)
+	return s
+
+## Оживляет кнопку: чуть растёт под курсором и «пружинит» при нажатии.
+func juicy(b: BaseButton) -> void:
+	b.resized.connect(func(): b.pivot_offset = b.size * 0.5)
+	b.mouse_entered.connect(func():
+		if not b.disabled:
+			b.create_tween().tween_property(b, "scale", Vector2(1.04, 1.04), 0.09))
+	b.mouse_exited.connect(func(): b.create_tween().tween_property(b, "scale", Vector2.ONE, 0.09))
+	b.button_down.connect(func(): b.create_tween().tween_property(b, "scale", Vector2(0.95, 0.95), 0.05))
+	b.button_up.connect(func():
+		var tw := b.create_tween()
+		tw.tween_property(b, "scale", Vector2(1.05, 1.05), 0.07)
+		tw.tween_property(b, "scale", Vector2.ONE, 0.09))
+
+## Плавное появление панели: вырастает из 85 % с лёгким «перелётом».
+func pop_in(c: Control) -> void:
+	c.pivot_offset = c.size * 0.5
+	c.scale = Vector2(0.85, 0.85)
+	c.modulate.a = 0.0
+	var tw := c.create_tween()
+	tw.tween_property(c, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(c, "modulate:a", 1.0, 0.14)
+
 func _make_theme() -> Theme:
 	var t := Theme.new()
 	t.default_font = font_ui
 	t.default_font_size = 22
 	# Кнопки
-	var n := sb(Color("5a3c22"), Color(GOLD, 0.8), 2, 12, 10)
-	var hv := sb(Color("75502e"), GOLD, 2, 12, 10)
-	var pr := sb(Color("3e2915"), GOLD, 2, 12, 10)
-	var ds := sb(Color(0.25, 0.22, 0.2, 0.8), Color(0.5, 0.45, 0.4, 0.6), 2, 12, 10)
-	var fc := sb(Color("75502e"), Color.WHITE, 2, 12, 10)
+	var n := btn_sb(Color("6a4526"), Color(GOLD, 0.85))
+	var hv := btn_sb(Color("86592f"), GOLD)
+	var pr := btn_sb(Color("452d17"), GOLD, true)
+	var ds := sb(Color(0.25, 0.22, 0.2, 0.8), Color(0.5, 0.45, 0.4, 0.6), 2, 14, 10)
+	var fc := sb(Color("75502e"), Color.WHITE, 2, 14, 10)
 	t.set_stylebox("normal", "Button", n)
 	t.set_stylebox("hover", "Button", hv)
 	t.set_stylebox("pressed", "Button", pr)
@@ -69,7 +111,10 @@ func _make_theme() -> Theme:
 	t.set_color("font_disabled_color", "Button", Color(0.7, 0.66, 0.6, 0.6))
 	t.set_font("font", "Button", font_bold)
 	# Панели
-	t.set_stylebox("panel", "PanelContainer", sb(GLASS))
+	var pn := sb(GLASS, Color(GOLD, 0.7), 2, 16, 12)
+	pn.shadow_size = 10
+	pn.shadow_color = Color(0, 0, 0, 0.4)
+	t.set_stylebox("panel", "PanelContainer", pn)
 	t.set_stylebox("panel", "Panel", sb(WOOD))
 	# Поля ввода
 	var le := sb(Color(0.08, 0.05, 0.03, 0.9), Color(GOLD, 0.5), 2, 10, 8)
@@ -107,9 +152,9 @@ func outlined(l: Label, outline: int = 6, col: Color = Color(0, 0, 0, 0.75)) -> 
 	return l
 
 func glass_button(b: Button, accent: Color = GOLD) -> Button:
-	b.add_theme_stylebox_override("normal", sb(GLASS, Color(accent, 0.5), 2, 12, 8))
-	b.add_theme_stylebox_override("hover", sb(Color(0.16, 0.11, 0.07, 0.75), accent, 2, 12, 8))
-	b.add_theme_stylebox_override("pressed", sb(Color(0.05, 0.03, 0.02, 0.8), accent, 2, 12, 8))
+	b.add_theme_stylebox_override("normal", btn_sb(Color(0.1, 0.07, 0.045, 0.72), Color(accent, 0.6), false, 13, 8))
+	b.add_theme_stylebox_override("hover", btn_sb(Color(0.2, 0.14, 0.09, 0.82), accent, false, 13, 8))
+	b.add_theme_stylebox_override("pressed", btn_sb(Color(0.05, 0.03, 0.02, 0.85), accent, true, 13, 8))
 	return b
 
 func button(text: String, size: int = 22, min_w: int = 0) -> Button:
@@ -119,4 +164,5 @@ func button(text: String, size: int = 22, min_w: int = 0) -> Button:
 	if min_w > 0:
 		b.custom_minimum_size.x = min_w
 	b.focus_mode = Control.FOCUS_NONE
+	juicy(b)
 	return b

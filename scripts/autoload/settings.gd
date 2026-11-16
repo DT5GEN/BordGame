@@ -84,7 +84,10 @@ func apply_volumes() -> void:
 
 func apply_video() -> void:
 	Engine.max_fps = 30 if eco else 60
-	get_tree().root.msaa_3d = Viewport.MSAA_DISABLED if eco else Viewport.MSAA_2X
+	# без экономии: сглаживание (на телефоне 2×, на ПК 4×) и мягкие тени
+	var mobile := OS.has_feature("mobile")
+	get_tree().root.msaa_3d = Viewport.MSAA_DISABLED if eco else (Viewport.MSAA_2X if mobile else Viewport.MSAA_4X)
+	RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_VERY_LOW if eco else (RenderingServer.SHADOW_QUALITY_SOFT_LOW if mobile else RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM))
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 
 func set_music_enabled(on: bool) -> void:
